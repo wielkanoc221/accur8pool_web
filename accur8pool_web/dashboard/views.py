@@ -24,17 +24,9 @@ DATA_DIR = Path(
     getattr(settings, "ACCUR8POOL_DATA_DIR", Path(settings.BASE_DIR) / "new_data" / "raw_data")
 )
 
-# Liczba "słupków" na wykresie. Dla każdego bierzemy minimum I maksimum,
-# więc punktów wychodzi do 2x tyle na serię.
-#
-# Skąd ta liczba: monitor ma rzędu 2000 pikseli w poziomie, a obszar
-# wykresu jeszcze mniej. Więcej niż jeden punkt na piksel jest fizycznie
-# niewidoczny. Sensem decymacji nie jest więc "mniej danych", tylko
-# "nie zgubić niczego, co i tak byłoby widać".
 TARGET_BUCKETS = 2500
 
-MAX_UPLOAD_SIZE = 300 * 1024 * 1024  # 300 MB
-
+MAX_UPLOAD_SIZE = 300 * 1024 * 1024
 
 def _user_dir(user):
     return DATA_DIR / str(user.pk)
@@ -96,9 +88,7 @@ def _load_series_cached(path_str, mtime, size):
 
     values = numeric.to_numpy(dtype=np.float32, copy=True)
 
-    # Normalizacja min-max liczona RAZ, na pełnym zbiorze. Gdyby liczyć ją
-    # po decymacji albo po zoomie, skala serii zmieniałaby się przy każdym
-    # przybliżeniu i porównywanie przebiegów straciłoby sens.
+
     col_min = np.nanmin(values, axis=0)
     col_max = np.nanmax(values, axis=0)
     span = col_max - col_min
