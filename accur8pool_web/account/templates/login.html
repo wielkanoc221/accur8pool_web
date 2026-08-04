@@ -1,0 +1,55 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html>
+
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+<link rel="stylesheet" href="{% static 'css/auth-mobile.css' %}">
+<link rel="stylesheet" href="{% static 'css/pool.css' %}">
+</head>
+
+
+
+<body>
+
+
+<div class="auth-card">
+
+
+<h2>Logowanie</h2>
+
+
+<form id="login-form" method="post">
+
+    {% csrf_token %}
+
+
+    {{ form.as_p }}
+
+
+    <button
+    id="ball"
+    class="{% if form.errors %}failed{% endif %}"
+    type="submit">
+
+    6
+
+</button>
+
+
+</form>
+
+<p class="auth-alt">
+        Nie masz konta? <a href="{% url 'register' %}">Zarejestruj się</a>
+    </p>
+</div>
+
+
+
+<script src="{% static 'js/pool.js' %}"></script>
+
+</body>
+
+</html>

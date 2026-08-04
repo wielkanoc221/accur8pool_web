@@ -1,0 +1,256 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>{{ dataset.name|default:"Dashboard" }} — accur8pool.pl</title>
+    <link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+    <link rel="stylesheet" href="{% static 'css/sidebar.css' %}">
+    <link rel="stylesheet" href="{% static 'css/datasets.css' %}">
+    <link rel="stylesheet" href="{% static 'css/mobile.css' %}">
+    <link rel="stylesheet" href="{% static 'css/fullscreen.css' %}">
+</head>
+<body>
+{% csrf_token %}
+
+<!-- ============================================================
+     LEWY SIDEBAR — struktura identyczna jak w datasets.html
+     ============================================================ -->
+<nav class="sidebar">
+    <div class="sidebar-header">
+        <a href="{% url 'dashboard' %}" class="logo">
+            <div class="logo-icon">📊</div>
+            <span>accur8pool.pl</span>
+        </a>
+    </div>
+
+    <div class="nav-viewport">
+        <div class="nav-menu-track" id="nav-menu-track">
+
+            <!-- PANEL 1: główne menu -->
+            <div class="nav-menu" id="nav-panel-main">
+                <div class="nav-section">Analityka</div>
+                <a href="{% url 'dashboard' %}" class="nav-item active">
+                    <span class="nav-icon">📈</span>
+                    Dashboard
+                </a>
+                <button type="button" class="nav-item" id="open-files-panel">
+                    <span class="nav-icon">📁</span>
+                    Zestawy danych
+                </button>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">🔍</span>
+                    Eksploracja
+                </a>
+
+                <div class="nav-section">Zarządzanie</div>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">🏷️</span>
+                    Segmenty
+                </a>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">⚙️</span>
+                    Ustawienia
+                </a>
+            </div>
+
+            <!-- PANEL 2: dostępne pliki (wysuwany) -->
+            <div class="nav-menu" id="nav-panel-files">
+                <button type="button" class="nav-panel-back" id="back-to-main">
+                    <span class="nav-icon">←</span>
+                    Wróć
+                </button>
+                <div class="nav-section">Dostępne pliki</div>
+                <label for="sidebar-upload-input" class="nav-item nav-upload-btn">
+                    <span class="nav-icon">📤</span>
+                    Prześlij plik CSV
+                </label>
+                <input type="file" id="sidebar-upload-input" accept=".csv" hidden>
+                <div id="sidebar-files-list">
+                    <div class="nav-panel-empty">Ładowanie…</div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <div class="sidebar-footer">
+        <div class="user-card">
+            <div class="user-avatar">{{ request.user.username|first|upper }}</div>
+            <div class="user-info">
+                <div class="user-name">{{ request.user.username|default:"Użytkownik" }}</div>
+                <div class="user-role">Administrator</div>
+            </div>
+        </div>
+        <form method="post" action="{% url 'logout' %}" class="logout-form">
+            {% csrf_token %}
+            <button type="submit" class="btn btn-ghost btn-sm btn-logout">
+                <span aria-hidden="true">⏻</span> Wyloguj
+            </button>
+        </form>
+    </div>
+</nav>
+
+<!-- ============================================================
+     GŁÓWNA KOLUMNA
+     ============================================================ -->
+<div class="main">
+    <header class="topbar">
+        <div class="page-title">
+            <h1>Dashboard</h1>
+            <p>{{ dataset.name|default:"Nie wybrano zestawu danych" }}</p>
+        </div>
+        <div class="topbar-actions">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="window.resetZoom()">
+                🔍 Reset zoomu
+            </button>
+            <a href="{% url 'datasets' %}" class="btn btn-ghost btn-sm">📁 Zestawy danych</a>
+        </div>
+    </header>
+
+    <div class="content">
+
+        <!-- ---------- KOLUMNA Z WYKRESEM ---------- -->
+        <div class="chart-column">
+
+            {% if error %}
+                <div class="alert alert-error">
+                    <span aria-hidden="true">⚠️</span>
+                    <span>{{ error }}</span>
+                </div>
+            {% endif %}
+
+            <div class="card chart-card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Przebieg pomiarów</div>
+                        <div class="card-subtitle">
+                            Kliknij serię w legendzie, aby ją pokazać lub ukryć
+                        </div>
+                    </div>
+                    <div class="card-actions">
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="window.resetZoom()">
+                            <span aria-hidden="true">🔍</span>
+                            <span class="btn-label">Reset</span>
+                        </button>
+                        <button type="button"
+                                class="btn btn-ghost btn-sm"
+                                id="graph-fullscreen"
+                                aria-pressed="false">
+                            <span class="fs-icon" aria-hidden="true">⛶</span>
+                            <span class="fs-label btn-label">Pełny ekran</span>
+                        </button>
+                    </div>
+                </div>
+                <div class="card-body">
+                    {% if graph_data %}
+                        <div id="graph"></div>
+                    {% else %}
+                        <div class="empty-state">
+                            <div class="empty-state-icon">📈</div>
+                            <p>
+                                Nie wybrano zestawu danych.<br>
+                                <a href="{% url 'datasets' %}">Wybierz plik CSV</a>, aby zobaczyć wykres.
+                            </p>
+                        </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <div class="stats-row">
+                <div class="stat-card">
+                    <div class="stat-label">Rekordy</div>
+                    <div class="stat-value">{{ dataset.records|default:"—" }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Kolumny</div>
+                    <div class="stat-value">{{ columns_count|default:"—" }}</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-label">Aktualizacja</div>
+                    <div class="stat-value">{{ dataset.updated_at|default:"—" }}</div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- ---------- PRAWY PANEL: SEGMENTY ----------
+             Na telefonie mobile.css zamienia go w panel wysuwany z dołu,
+             otwierany przyciskiem w dolnym pasku (mobile-nav.js). -->
+        <aside class="right-sidebar" id="segments-panel">
+
+            <div class="card segment-card">
+                <div class="card-header">
+                    <div>
+                        <div class="card-title">Segmenty</div>
+                        <div class="card-subtitle">
+                            Zdefiniowane zakresy: <span id="seg-count">0</span>
+                        </div>
+                    </div>
+                    <button type="button"
+                            class="sheet-close"
+                            id="segments-close"
+                            aria-label="Zamknij panel segmentów">×</button>
+                </div>
+                <div class="card-body">
+                    <div class="hint">
+                        <span aria-hidden="true">💡</span>
+                        <span>Przybliż fragment wykresu, potem dodaj segment.</span>
+                    </div>
+
+                    <div class="segment-toolbar">
+                        <button type="button" class="btn btn-primary btn-sm" id="create">
+                            <span aria-hidden="true">✂️</span> Nowy segment
+                        </button>
+                        <button type="button" class="btn btn-ghost btn-sm" onclick="window.resetZoom()">
+                            <span aria-hidden="true">🔍</span> Reset
+                        </button>
+                    </div>
+
+                    <div class="segment-list" id="segment_list">
+                        <div class="empty-state">
+                            <div class="empty-state-icon">✂️</div>
+                            <p>Brak segmentów.<br>Zdefiniuj pierwszy zakres na wykresie.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="card info-card">
+                <div class="card-body">
+                    <div class="info-title">Jak to działa</div>
+                    <div class="info-text">
+                        Zaznacz na wykresie interesujący cię przedział,
+                        a następnie zapisz go jako segment. Segmenty pozostają
+                        widoczne na wykresie także po zmianie zoomu.
+                    </div>
+                </div>
+            </div>
+
+        </aside>
+
+    </div>
+</div>
+
+<!-- ============================================================
+     DANE + SKRYPTY
+
+     Dane idą przez json_script (Django sam ucieka znaki), a odczytuje
+     je dashboard.js. Świadomie NIE ma tu inline'owego <script> —
+     jeden literówkowy znak w szablonie potrafi sprawić, że przeglądarka
+     wypisze kod jako tekst zamiast go wykonać.
+     ============================================================ -->
+{% if graph_data %}
+    {{ graph_data|json_script:"graph-data" }}
+{% endif %}
+{{ dataset.id|json_script:"dataset-id" }}
+
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<script src="{% static 'js/upload.js' %}"></script>
+<script src="{% static 'js/dashboard.js' %}"></script>
+<script src="{% static 'js/sidebar-panels.js' %}"></script>
+<script src="{% static 'js/mobile-nav.js' %}"></script>
+<script src="{% static 'js/fullscreen.js' %}"></script>
+</body>
+</html>

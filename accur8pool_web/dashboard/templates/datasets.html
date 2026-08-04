@@ -1,0 +1,139 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Zestawy danych — accur8pool.pl</title>
+    <link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
+    <link rel="stylesheet" href="{% static 'css/datasets.css' %}">
+    <link rel="stylesheet" href="{% static 'css/sidebar.css' %}">
+    <link rel="stylesheet" href="{% static 'css/mobile.css' %}">
+</head>
+<body>
+{% csrf_token %}
+
+<!-- LEFT SIDEBAR -->
+<nav class="sidebar">
+    <div class="sidebar-header">
+        <div class="logo">
+            <div class="logo-icon">📊</div>
+            <span>accur8pool.pl</span>
+        </div>
+    </div>
+
+    <div class="nav-viewport">
+        <div class="nav-menu-track" id="nav-menu-track">
+
+            <!-- PANEL 1: główne menu -->
+            <div class="nav-menu" id="nav-panel-main">
+                <div class="nav-section">Analityka</div>
+                <a href="{% url 'dashboard' %}" class="nav-item">
+                    <span class="nav-icon">📈</span>
+                    Dashboard
+                </a>
+                <button type="button" class="nav-item active" id="open-files-panel">
+                    <span class="nav-icon">📁</span>
+                    Zestawy danych
+                </button>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">🔍</span>
+                    Eksploracja
+                </a>
+
+                <div class="nav-section">Zarządzanie</div>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">🏷️</span>
+                    Segmenty
+                </a>
+                <a href="#" class="nav-item">
+                    <span class="nav-icon">⚙️</span>
+                    Ustawienia
+                </a>
+            </div>
+
+            <!-- PANEL 2: dostępne pliki (wysuwany) -->
+            <div class="nav-menu" id="nav-panel-files">
+                <button type="button" class="nav-panel-back" id="back-to-main">
+                    <span class="nav-icon">←</span>
+                    Wróć
+                </button>
+                <div class="nav-section">Dostępne pliki</div>
+                <label for="sidebar-upload-input" class="nav-item nav-upload-btn">
+                    <span class="nav-icon">📤</span>
+                    Prześlij plik CSV
+                </label>
+                <input type="file" id="sidebar-upload-input" accept=".csv" hidden>
+                <div id="sidebar-files-list">
+                    <div class="nav-panel-empty">Ładowanie…</div>
+                </div>
+            </div>
+
+        </div>
+    </div>
+
+    <div class="sidebar-footer">
+        <div class="user-card">
+            <div class="user-avatar">{{ request.user.username|first|upper }}</div>
+            <div class="user-info">
+                <div class="user-name">{{ request.user.username|default:"Użytkownik" }}</div>
+                <div class="user-role">Administrator</div>
+            </div>
+        </div>
+    </div>
+</nav>
+
+<!-- MAIN -->
+<div class="main">
+    <header class="topbar">
+        <div class="page-title">
+            <h1>Zestawy danych</h1>
+            <p>Pliki powiązane z Twoim kontem</p>
+        </div>
+        <div class="topbar-actions">
+            <button class="btn btn-ghost btn-sm" onclick="loadDatasets()">🔄 Odśwież</button>
+        </div>
+    </header>
+
+    <div class="content datasets-content">
+        <div class="card upload-card">
+            <div class="card-header">
+                <div>
+                    <div class="card-title">Dodaj zestaw danych</div>
+                    <div class="card-subtitle">Prześlij plik CSV ze swojego urządzenia</div>
+                </div>
+            </div>
+            <div class="card-body">
+                <label for="upload-input" class="btn btn-primary btn-sm">
+                    📤 Wybierz plik CSV
+                </label>
+                <input type="file" id="upload-input" accept=".csv" hidden>
+                <div id="upload-status"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <div>
+                    <div class="card-title">Twoje zestawy danych</div>
+                    <div class="card-subtitle">Wybierz zestaw, aby otworzyć jego dashboard</div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="datasets_list" class="datasets-grid">
+                    <div class="empty-state">
+                        <div class="empty-state-icon">⏳</div>
+                        <p>Ładowanie zestawów danych…</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="{% static 'js/upload.js' %}"></script>
+<script src="{% static 'js/dataset.js' %}"></script>
+<script src="{% static 'js/sidebar-panels.js' %}"></script>
+<script src="{% static 'js/mobile-nav.js' %}"></script>
+</body>
+</html>

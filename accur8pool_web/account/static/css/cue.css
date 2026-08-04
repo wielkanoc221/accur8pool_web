@@ -1,0 +1,66 @@
+/* --- LINK DO REJESTRACJI ---------------------------------------------- */
+.auth-alt {
+    margin: 22px 0 0;
+    text-align: center;
+    font-size: 0.9rem;
+    letter-spacing: 0.02em;
+    opacity: 0.75;
+}
+
+.auth-alt a {
+    position: relative;
+    color: #f3ead4;              /* kolor pierścienia kija */
+    text-decoration: none;
+    font-weight: 600;
+    padding-bottom: 2px;
+}
+
+/* Podkreślenie "toczy się" spod linku przy najechaniu */
+.auth-alt a::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    height: 2px;
+    background: #1d6b52;         /* zieleń sukna / końcówki kija */
+    transform: scaleX(0);
+    transform-origin: left center;
+    transition: transform 0.28s cubic-bezier(0.22, 0.7, 0.3, 1);
+}
+
+.auth-alt a:hover::after,
+.auth-alt a:focus-visible::after {
+    transform: scaleX(1);
+}
+
+.auth-alt a:focus-visible {
+    outline: 2px solid #1d6b52;
+    outline-offset: 3px;
+    border-radius: 2px;
+}
+
+/* Link chowa się w trakcie strzału, żeby nie rozpraszał */
+#login-form:has(#ball.move) ~ .auth-alt,
+#register-form:has(#register-ball.move) ~ .auth-alt {
+    opacity: 0;
+    transition: opacity 0.25s ease;
+}
+
+@media (max-width: 480px) {
+    .auth-alt {
+        margin-top: 18px;
+        font-size: 0.85rem;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .auth-alt a::after {
+        transition: none;
+    }
+
+    #login-form:has(#ball.move) ~ .auth-alt,
+    #register-form:has(#register-ball.move) ~ .auth-alt {
+        transition: none;
+    }
+}

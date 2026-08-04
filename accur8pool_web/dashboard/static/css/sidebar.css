@@ -1,0 +1,92 @@
+/* Sidebar z dwoma "wysuwanymi" panelami: głównym menu i listą plików.
+   Zmienne CSS z fallbackami (--border, --text-muted, --primary) — podmień
+   na swoje realne tokeny z dashboard.css, jeśli nazwy się nie zgadzają. */
+
+.nav-viewport {
+    overflow: hidden;
+    flex: 1;
+}
+
+.nav-menu-track {
+    display: flex;
+    width: 200%;
+    height: 100%;
+    transition: transform 0.25s ease;
+}
+
+.nav-menu-track.show-files {
+    transform: translateX(-50%);
+}
+
+.nav-menu-track .nav-menu {
+    width: 50%;
+    flex-shrink: 0;
+    box-sizing: border-box;
+}
+
+/* Przycisk "Zestawy danych" wygląda jak reszta nav-item, ale to <button> */
+#open-files-panel {
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font: inherit;
+}
+
+.nav-panel-back {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    font: inherit;
+    color: var(--text-muted, #64748b);
+    border-radius: 8px;
+}
+
+.nav-panel-back:hover {
+    background: var(--border, #e2e8f0);
+}
+
+.nav-panel-empty {
+    padding: 12px;
+    font-size: 13px;
+    color: var(--text-muted, #64748b);
+}
+
+.nav-file-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.nav-file-name {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.nav-file-item.active {
+    background: var(--border, #e2e8f0);
+    font-weight: 600;
+}
+
+.nav-upload-btn {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    color: var(--primary, #3b82f6);
+}
+
+.logout-form { margin: 0; }
+.btn-logout {
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
+}

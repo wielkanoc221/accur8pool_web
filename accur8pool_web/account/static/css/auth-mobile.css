@@ -1,0 +1,83 @@
+/* ============================================
+   ACCUR8POOL — widok mobilny dla logowania i rejestracji
+   Ładuj PO styles.css (nadpisuje jego reguły).
+   ============================================ */
+
+/* Karta ma stałe 380px — na wąskich telefonach wystaje poza ekran.
+   Płynna szerokość z górnym limitem działa wszędzie tak samo. */
+.auth-card {
+    width: 100%;
+    max-width: 380px;
+}
+
+body {
+    /* Animacja bili przesuwa ją o 260px w prawo — bez tego telefon
+       pozwalałby przewijać stronę w bok podczas animacji. */
+    overflow-x: hidden;
+
+    /* 100vh na mobile chowa treść pod paskiem adresu przeglądarki */
+    height: 100dvh;
+
+    /* Margines, żeby karta nie kleiła się do krawędzi ekranu */
+    padding: 16px;
+}
+
+@media (max-width: 480px) {
+
+    .auth-card {
+        padding: 28px 22px;
+        border-radius: 16px;
+    }
+
+    h1, h2 {
+        font-size: 24px;
+        margin-bottom: 22px;
+    }
+
+    .form-field { margin-bottom: 14px; }
+
+    /* UWAGA: nie zmniejszaj poniżej 16px — iOS Safari automatycznie
+       przybliża ekran przy focusie na input z mniejszą czcionką. */
+    input,
+    .form-field input {
+        font-size: 16px;
+        padding: 12px;
+    }
+
+    /* Bila: mniejsza i z krótszym "wbiciem", żeby nie wylatywała
+       daleko poza wąski ekran */
+    #ball,
+    #register-ball {
+        width: 64px;
+        height: 64px;
+        font-size: 26px;
+        margin-top: 18px;
+    }
+
+    #ball.move,
+    #register-ball.move {
+        transform: translateX(40vw) rotate(1080deg) scale(0.15);
+    }
+}
+
+/* Ekrany niskie (telefon w poziomie) — karta musi dać się przewinąć */
+@media (max-height: 600px) {
+    body {
+        align-items: flex-start;
+        overflow-y: auto;
+    }
+}
+
+/* Szanuj systemowe ustawienie "ogranicz animacje" */
+@media (prefers-reduced-motion: reduce) {
+    #ball,
+    #register-ball {
+        transition: opacity 0.2s;
+    }
+
+    #ball.move,
+    #register-ball.move {
+        transform: none;
+        opacity: 0;
+    }
+}

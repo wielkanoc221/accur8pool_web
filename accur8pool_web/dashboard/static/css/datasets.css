@@ -1,0 +1,86 @@
+/* Style dla widoku "Zestawy danych".
+   Zmienne CSS (--border, --surface, --primary, --text-muted) to zgadywane
+   nazwy na podstawie klas w Twoim dashboard.css — podmień je na swoje realne
+   tokeny kolorów, jeśli się nie zgadzają, albo po prostu wklej te reguły
+   bezpośrednio do dashboard.css. */
+
+.datasets-content {
+    grid-template-columns: 1fr;
+}
+
+.datasets-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 12px;
+}
+
+.dataset-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border, #e2e8f0);
+    background: var(--surface, #fff);
+    text-decoration: none;
+    color: inherit;
+    transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.dataset-card:hover {
+    border-color: var(--primary, #3b82f6);
+    transform: translateY(-1px);
+}
+
+.dataset-card.active {
+    border-color: var(--primary, #3b82f6);
+    background: var(--primary-tint, #eff6ff);
+}
+
+.dataset-card-icon {
+    font-size: 24px;
+    flex-shrink: 0;
+}
+
+.dataset-card-info {
+    flex: 1;
+    min-width: 0;
+}
+
+.dataset-card-name {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.dataset-card-meta {
+    font-size: 13px;
+    color: var(--text-muted, #64748b);
+    margin-top: 2px;
+}
+
+.dataset-card-arrow {
+    color: var(--text-muted, #64748b);
+    flex-shrink: 0;
+}
+
+.upload-card .card-body {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+#upload-status {
+    font-size: 13px;
+    color: var(--text-muted, #64748b);
+}
+
+.upload-status-ok {
+    color: var(--success, #16a34a);
+}
+
+.upload-status-error {
+    color: var(--error, #dc2626);
+}

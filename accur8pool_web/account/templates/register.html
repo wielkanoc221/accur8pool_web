@@ -1,0 +1,104 @@
+{% load static %}
+
+<!DOCTYPE html>
+<html lang="pl">
+
+<head>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta charset="UTF-8">
+    <title>Rejestracja</title>
+        <link rel="stylesheet" href="{% static 'css/styles.css' %}">
+<link rel="stylesheet" href="{% static 'css/auth-mobile.css' %}">
+<link rel="stylesheet" href="{% static 'css/pool.css' %}">
+    <link rel="stylesheet" href="{% static 'css/pool.css' %}">
+</head>
+
+
+<body>
+
+
+<div class="auth-card">
+
+
+    <h1>Rejestracja</h1>
+
+
+    <form id="register-form" method="POST">
+
+        {% csrf_token %}
+
+
+        <div class="form-field">
+
+            <label>Nazwa użytkownika</label>
+
+            {{ form.username }}
+
+            {% for error in form.username.errors %}
+                <p class="error">{{ error }}</p>
+            {% endfor %}
+
+        </div>
+
+
+
+        <div class="form-field">
+
+            <label>Email</label>
+
+            {{ form.email }}
+
+            {% for error in form.email.errors %}
+                <p class="error">{{ error }}</p>
+            {% endfor %}
+
+        </div>
+
+
+
+        <div class="form-field">
+
+            <label>Hasło</label>
+
+            {{ form.password1 }}
+
+            {% for error in form.password1.errors %}
+                <p class="error">{{ error }}</p>
+            {% endfor %}
+
+        </div>
+
+
+
+        <div class="form-field">
+
+            <label>Powtórz hasło</label>
+
+            {{ form.password2 }}
+
+            {% for error in form.password2.errors %}
+                <p class="error">{{ error }}</p>
+            {% endfor %}
+
+        </div>
+
+
+
+        <button id="register-ball"
+        class="{% if form.errors %}failed{% endif %}"
+        type="submit">
+         6
+        </button>
+
+
+    </form>
+
+
+</div>
+
+
+<script src="{% static 'js/pool.js' %}"></script>
+
+
+</body>
+</html>

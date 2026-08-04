@@ -1,0 +1,273 @@
+/* ============================================
+   ACCUR8POOL — widok mobilny
+   Ładuj PO dashboard.css, sidebar.css i datasets.css.
+
+   Założenie: telefon dostaje INNY układ niż desktop, a nie ten sam
+   ściśnięty. Nawigacja ląduje na dole (w zasięgu kciuka), segmenty
+   otwierają się jako panel z dołu, a wykres dostaje cały ekran.
+   ============================================ */
+
+/* Elementy istniejące tylko na mobile — domyślnie schowane */
+.mobile-nav,
+.sidebar-backdrop,
+.sheet-close {
+    display: none;
+}
+
+/* --- Poprawka niezależna od szerokości: rząd statystyk był ustawiony
+   na sztywne 3 kolumny, a została w nim jedna karta (rozciągała się
+   na całą szerokość). --- */
+.stats-row {
+    display: flex;
+    flex-wrap: wrap;
+}
+
+.stats-row .stat-card {
+    flex: 0 1 220px;
+}
+
+/* ============================================
+   TABLET (≤1024px) — sidebar węższy, treść w kolumnie
+   ============================================ */
+@media (max-width: 1024px) {
+    .sidebar { width: 220px; }
+}
+
+/* ============================================
+   TELEFON (≤768px)
+   ============================================ */
+@media (max-width: 768px) {
+
+    /* 100vh na mobile chowa treść pod paskiem przeglądarki.
+       dvh uwzględnia chowające się paski. */
+    body {
+        height: 100dvh;
+        overflow: hidden;
+    }
+
+    /* --- 1. Sidebar: szuflada zamiast display:none --- */
+    .sidebar {
+        display: flex;                /* nadpisuje display:none z dashboard.css */
+        position: fixed;
+        top: 0;
+        left: 0;
+        bottom: 0;
+        z-index: 1000;
+        width: 290px;
+        max-width: 86vw;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        box-shadow: 0 0 40px rgba(0,0,0,0.45);
+    }
+
+    .sidebar.open { transform: translateX(0); }
+
+    .sidebar-backdrop {
+        display: block;
+        position: fixed;
+        inset: 0;
+        z-index: 999;
+        background: rgba(15, 23, 42, 0.55);
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 0.25s ease;
+    }
+
+    .sidebar-backdrop.visible {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    /* Większe cele dotykowe w menu */
+    .nav-item,
+    .nav-panel-back {
+        padding: 13px 12px;
+        font-size: 15px;
+    }
+
+    /* --- 2. Topbar: sam tytuł. Akcje przenoszą się na dolny pasek,
+       bo u góry ekranu telefonu są poza zasięgiem kciuka. --- */
+    .topbar {
+        height: auto;
+        min-height: 56px;
+        padding: 10px 16px;
+    }
+
+    .page-title { min-width: 0; }
+
+    .page-title h1 {
+        font-size: 17px;
+    }
+
+    /* Nazwa pliku bywa długa — nie może rozpychać layoutu */
+    .page-title p {
+        font-size: 12px;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+
+    .topbar-actions { display: none; }
+
+    /* --- 3. Treść: wykres dostaje maksimum miejsca --- */
+    .content {
+        padding: 12px;
+        gap: 12px;
+        padding-bottom: 76px;   /* miejsce na dolny pasek nawigacji */
+    }
+
+    .chart-column { gap: 12px; }
+
+    .card-header { padding: 14px 16px; }
+    .card-body   { padding: 14px 16px; }
+
+    .card-subtitle { display: none; }   /* podtytuły zjadają miejsce */
+
+    #graph { min-height: 340px; }
+
+    /* Rząd statystyk: jedna karta, kompaktowa i pozioma */
+    .stats-row .stat-card {
+        flex: 1;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 12px 16px;
+    }
+
+    .stat-label { margin-bottom: 0; font-size: 11px; }
+    .stat-value { font-size: 20px; }
+    .stat-change { display: none; }
+
+    /* --- 4. Segmenty jako panel wysuwany z dołu --- */
+    .right-sidebar {
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 1000;
+        width: 100%;
+        max-height: 78dvh;
+        overflow-y: auto;
+        padding: 0 12px 12px;
+        background: var(--bg-body);
+        border-radius: 18px 18px 0 0;
+        box-shadow: 0 -8px 40px rgba(0,0,0,0.25);
+        transform: translateY(101%);
+        transition: transform 0.28s ease;
+    }
+
+    .right-sidebar.open { transform: translateY(0); }
+
+    /* Uchwyt panelu — sygnalizuje, że to wysuwana warstwa */
+    .right-sidebar::before {
+        content: '';
+        display: block;
+        width: 40px;
+        height: 4px;
+        margin: 10px auto;
+        border-radius: 2px;
+        background: var(--text-muted);
+        opacity: 0.4;
+    }
+
+    .sheet-close {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border: none;
+        background: transparent;
+        border-radius: 8px;
+        font-size: 24px;
+        line-height: 1;
+        color: var(--text-muted);
+        cursor: pointer;
+    }
+
+    /* Na dotyku nie ma :hover — akcje muszą być zawsze widoczne */
+    .seg-actions { opacity: 1; }
+
+    .segment-item { padding: 14px; }
+
+    .seg-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 18px;
+    }
+
+    /* Wskazówka i karta info tylko zabierają miejsce na małym ekranie */
+    .info-card { display: none; }
+
+    /* --- 5. Dolny pasek nawigacji (główna zmiana układu) --- */
+    .mobile-nav {
+        display: flex;
+        position: fixed;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        z-index: 900;
+        background: var(--bg-card);
+        border-top: 1px solid var(--border);
+        /* Zapas na pasek gestów w iOS/Androidzie */
+        padding-bottom: env(safe-area-inset-bottom, 0);
+    }
+
+    .mobile-nav-btn {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 3px;
+        min-height: 60px;
+        padding: 8px 4px;
+        border: none;
+        background: transparent;
+        color: var(--text-secondary);
+        font-size: 11px;
+        font-family: inherit;
+        cursor: pointer;
+    }
+
+    .mobile-nav-btn .mnav-icon { font-size: 20px; line-height: 1; }
+
+    .mobile-nav-btn.active { color: var(--accent); }
+
+    /* Karty zestawów danych — jedna na rząd */
+    .datasets-grid { grid-template-columns: 1fr; }
+
+    .dataset-card { padding: 14px; }
+
+    .upload-card .card-body { gap: 10px; }
+
+    .upload-card .btn { width: 100%; justify-content: center; }
+}
+
+/* ============================================
+   MAŁE TELEFONY (≤380px)
+   ============================================ */
+@media (max-width: 380px) {
+    .content { padding: 10px; padding-bottom: 74px; }
+    #graph { min-height: 300px; }
+    .page-title h1 { font-size: 16px; }
+}
+
+/* ============================================
+   DOSTĘPNOŚĆ
+   ============================================ */
+@media (prefers-reduced-motion: reduce) {
+    .sidebar,
+    .sidebar-backdrop,
+    .right-sidebar,
+    .nav-menu-track {
+        transition: none;
+    }
+}
+
+/* Widoczny fokus klawiatury */
+.mobile-nav-btn:focus-visible,
+.sheet-close:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
