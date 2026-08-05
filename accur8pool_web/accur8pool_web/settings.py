@@ -34,7 +34,11 @@ ALLOWED_HOSTS = [
 CSRF_TRUSTED_ORIGINS = [
     "http://accur8pool.pl",
     "http://www.accur8pool.pl",
+    'https://accur8pool.pl',
+    'https://www.accur8pool.pl',
 ]
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
 ACCUR8POOL_DATA_DIR = BASE_DIR / "new_data" / "raw_data"
 AUTH_PASSWORD_VALIDATORS = []
 LOGIN_URL = '/login'

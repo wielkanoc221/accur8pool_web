@@ -28,6 +28,7 @@ TARGET_BUCKETS = 2500
 
 MAX_UPLOAD_SIZE = 300 * 1024 * 1024
 
+
 def _user_dir(user):
     return DATA_DIR / str(user.pk)
 
@@ -87,7 +88,6 @@ def _load_series_cached(path_str, mtime, size):
         return {"names": [], "values": np.empty((0, 0), dtype=np.float32), "n": 0}
 
     values = numeric.to_numpy(dtype=np.float32, copy=True)
-
 
     col_min = np.nanmin(values, axis=0)
     col_max = np.nanmax(values, axis=0)
@@ -191,7 +191,7 @@ def _build_figure(series):
         xaxis=dict(title="Indeks"),
         yaxis=dict(title="Wartość znormalizowana"),
         legend=dict(orientation="v", x=1.02, y=1, xanchor="left", yanchor="top"),
-        uirevision="keep",   # zoom przeżywa aktualizacje danych
+        uirevision="keep",  # zoom przeżywa aktualizacje danych
     )
     return fig
 
