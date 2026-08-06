@@ -19,7 +19,7 @@
 /* ============================================
    TRYB PEŁNOEKRANOWY
    ============================================ */
-.chart-card.is-fullscreen {
+.card.is-fullscreen {
     position: fixed;
     inset: 0;
     z-index: 1200;
@@ -32,24 +32,24 @@
     max-height: 100dvh;
 }
 
-.chart-card.is-fullscreen .card-header {
+.card.is-fullscreen .card-header {
     /* nagłówek zostaje jako pasek sterowania, ale niższy */
     padding: 10px 16px;
     padding-top: max(10px, env(safe-area-inset-top));
 }
 
-.chart-card.is-fullscreen .card-subtitle {
+.card.is-fullscreen .card-subtitle {
     display: none;
 }
 
-.chart-card.is-fullscreen .card-body {
+.card.is-fullscreen .card-body {
     padding: 8px 12px;
     padding-bottom: max(8px, env(safe-area-inset-bottom));
     min-height: 0;   /* bez tego flex-child nie kurczy się poniżej treści */
 }
 
 /* Wykres wypełnia całą dostępną wysokość zamiast trzymać min-height */
-.chart-card.is-fullscreen #graph {
+.card.is-fullscreen .plot-area {
     min-height: 0;
     height: 100%;
 }
@@ -88,29 +88,29 @@ body.graph-fullscreen .sidebar-backdrop {
     }
 
     /* W poziomie telefon ma bardzo mało wysokości — oddaj ją wykresowi */
-    .chart-card.is-fullscreen .card-header {
+    .card.is-fullscreen .card-header {
         padding: 6px 12px;
         padding-top: max(6px, env(safe-area-inset-top));
     }
 
-    .chart-card.is-fullscreen .card-title {
+    .card.is-fullscreen .card-title {
         font-size: 13px;
     }
 }
 
 /* Telefon w poziomie: ukryj tytuł, zostaw same przyciski */
 @media (max-width: 900px) and (orientation: landscape) {
-    .chart-card.is-fullscreen .card-title {
+    .card.is-fullscreen .card-title {
         display: none;
     }
 
-    .chart-card.is-fullscreen .card-header {
+    .card.is-fullscreen .card-header {
         justify-content: flex-end;
         border-bottom: none;
     }
 
     /* Wcięcia na "notcha" przy trzymaniu telefonu poziomo */
-    .chart-card.is-fullscreen .card-body {
+    .card.is-fullscreen .card-body {
         padding-left: max(12px, env(safe-area-inset-left));
         padding-right: max(12px, env(safe-area-inset-right));
     }
@@ -125,7 +125,7 @@ body.graph-fullscreen .sidebar-backdrop {
 }
 
 /* Podpowiedź dla klawiatury — widoczna tylko w trybie pełnoekranowym */
-.chart-card.is-fullscreen::after {
+.card.is-fullscreen::after {
     content: 'Esc — wyjdź';
     position: absolute;
     right: 12px;
@@ -138,7 +138,7 @@ body.graph-fullscreen .sidebar-backdrop {
 
 @media (hover: none) {
     /* Na dotyku nie ma klawisza Esc — nie kłam w interfejsie */
-    .chart-card.is-fullscreen::after {
+    .card.is-fullscreen::after {
         content: none;
     }
 }

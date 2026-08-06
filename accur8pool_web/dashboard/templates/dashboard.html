@@ -11,6 +11,7 @@
     <link rel="stylesheet" href="{% static 'css/segments.css' %}">
     <link rel="stylesheet" href="{% static 'css/mobile.css' %}">
     <link rel="stylesheet" href="{% static 'css/fullscreen.css' %}">
+    <link rel="stylesheet" href="{% static 'css/motion3d.css' %}">
 </head>
 <body>
 {% csrf_token %}
@@ -103,7 +104,23 @@
             <p>{{ dataset.name|default:"Nie wybrano zestawu danych" }}</p>
         </div>
         <div class="topbar-actions">
-            <button type="button" class="btn btn-ghost btn-sm" onclick="window.resetZoom()">
+            <nav class="view-tabs" role="tablist" aria-label="Widok danych">
+                <button type="button" class="view-tab is-active" data-view="2d"
+                        role="tab" aria-selected="true" aria-controls="view-2d">
+                    <span class="tab-icon" aria-hidden="true">📈</span>
+                    <span class="tab-label">Przebieg 2D</span>
+                </button>
+                <button type="button" class="view-tab" data-view="3d"
+                        role="tab" aria-selected="false" aria-controls="view-3d"
+                        {% if not motion3d_ready %}disabled
+                        title="Plik nie zawiera kolumn IMU (gyr*/rot* + timestamp)"{% endif %}>
+                    <span class="tab-icon" aria-hidden="true">🧊</span>
+                    <span class="tab-label">Ruch 3D</span>
+                </button>
+            </nav>
+
+            <button type="button" class="btn btn-ghost btn-sm" id="topbar-reset"
+                    onclick="window.resetZoom()">
                 🔍 Reset zoomu
             </button>
             <a href="{% url 'datasets' %}" class="btn btn-ghost btn-sm">📁 Zestawy danych</a>
@@ -122,7 +139,10 @@
                 </div>
             {% endif %}
 
-            <div class="card chart-card">
+            <!-- ---------- WIDOK 1: przebieg 2D ---------- -->
+            <div class="view-panel is-active" id="view-2d" role="tabpanel">
+
+            <div class="card chart-card" data-fullscreen-card>
                 <div class="card-header">
                     <div>
                         <div class="card-title">Przebieg pomiarów</div>
@@ -138,6 +158,7 @@
                         <button type="button"
                                 class="btn btn-ghost btn-sm"
                                 id="graph-fullscreen"
+                                data-fullscreen-btn
                                 aria-pressed="false">
                             <span class="fs-icon" aria-hidden="true">⛶</span>
                             <span class="fs-label btn-label">Pełny ekran</span>
@@ -146,7 +167,7 @@
                 </div>
                 <div class="card-body">
                     {% if graph_data %}
-                        <div id="graph"></div>
+                        <div id="graph" class="plot-area"></div>
                     {% else %}
                         <div class="empty-state">
                             <div class="empty-state-icon">📈</div>
@@ -174,15 +195,96 @@
                 </div>
             </div>
 
+            </div><!-- /view-2d -->
+
+            <!-- ---------- WIDOK 2: animacja 3D ---------- -->
+            <div class="view-panel" id="view-3d" role="tabpanel" hidden>
+
+                <div class="card chart-card chart-3d-card" data-fullscreen-card>
+                    <div class="card-header">
+                        <div class="m3d-head">
+                            <div class="card-title">Ruch nadgarstka w 3D</div>
+                            <div class="card-subtitle" id="m3d-label">
+                                Wybierz zakres do odtworzenia
+                            </div>
+                        </div>
+                        <div class="card-actions">
+                            <select id="m3d-source" class="m3d-select"
+                                    aria-label="Zakres do animacji">
+                                <option value="view">Widoczny zakres wykresu</option>
+                            </select>
+                            <button type="button"
+                                    class="btn btn-ghost btn-sm"
+                                    id="m3d-fullscreen"
+                                    data-fullscreen-btn
+                                    aria-pressed="false">
+                                <span class="fs-icon" aria-hidden="true">⛶</span>
+                                <span class="fs-label btn-label">Pełny ekran</span>
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="card-body">
+                        <div class="m3d-player" id="m3d-player">
+                            <button type="button" class="btn btn-primary btn-sm"
+                                    id="m3d-play" disabled>
+                                <span aria-hidden="true">▶</span>
+                                <span id="m3d-play-label">Odtwórz</span>
+                            </button>
+                            <label class="m3d-speed-label">
+                                tempo
+                                <select id="m3d-speed" class="m3d-select">
+                                    <option value="0.1">0.1×</option>
+                                    <option value="0.25">0.25×</option>
+                                    <option value="0.5">0.5×</option>
+                                    <option value="1" selected>1×</option>
+                                    <option value="2">2×</option>
+                                </select>
+                            </label>
+                            <input type="range" id="m3d-seek" class="m3d-seek"
+                                   min="0" max="1" step="0.001" value="0"
+                                   aria-label="Pozycja w nagraniu" disabled>
+                            <span class="m3d-clock" id="m3d-clock">0.00 / 0.00 s</span>
+                            <span class="m3d-perf" id="m3d-perf"></span>
+                        </div>
+
+                        <div class="m3d-stage">
+                            <div id="graph3d" class="plot-area" hidden></div>
+                            <div class="empty-state m3d-state" id="m3d-state">
+                                <div class="empty-state-icon">🧊</div>
+                                <p id="m3d-state-text">
+                                    Zaznacz segment na wykresie 2D albo przybliż
+                                    fragment i wróć tutaj.
+                                </p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stats-row" id="m3d-stats">
+                    <div class="stat-card">
+                        <div class="stat-label">Czas segmentu</div>
+                        <div class="stat-value" id="m3d-stat-time">—</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Droga nadgarstka</div>
+                        <div class="stat-value" id="m3d-stat-path">—</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Prędkość maks.</div>
+                        <div class="stat-value" id="m3d-stat-vmax">—</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-label">Klatki</div>
+                        <div class="stat-value" id="m3d-stat-frames">—</div>
+                    </div>
+                </div>
+
+            </div><!-- /view-3d -->
+
         </div>
 
-        <!-- ---------- PRAWY PANEL: SEGMENTY ----------
-             Dwa widoki w jednej karcie: lista uderzeń i fazy wybranego
-             uderzenia. Przełącza je segments.js atrybutem hidden, całą
-             treść list też renderuje on — tutaj jest tylko szkielet.
-
-             Na telefonie mobile.css zamienia panel w wysuwany z dołu,
-             otwierany przyciskiem w dolnym pasku (mobile-nav.js). -->
+        <!-- ---------- PRAWY PANEL: SEGMENTY ---------- -->
         <aside class="right-sidebar" id="segments-panel">
 
             <div class="card segment-card">
@@ -254,25 +356,21 @@
 
 <!-- ============================================================
      DANE + SKRYPTY
-
-     Dane idą przez json_script (Django sam ucieka znaki), a odczytuje
-     je dashboard.js. Świadomie NIE ma tu inline'owego <script> —
-     jeden literówkowy znak w szablonie potrafi sprawić, że przeglądarka
-     wypisze kod jako tekst zamiast go wykonać.
      ============================================================ -->
 {% if graph_data %}
     {{ graph_data|json_script:"graph-data" }}
 {% endif %}
 {{ dataset.id|json_script:"dataset-id" }}
+{{ total_points|json_script:"total-points" }}
+{{ motion3d_ready|json_script:"motion3d-ready" }}
 
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<script src="https://cdn.plot.ly/plotly-3.7.0.min.js" charset="utf-8"></script>
 <script src="{% static 'js/upload.js' %}"></script>
 <script src="{% static 'js/dashboard.js' %}"></script>
-<!-- segments.js po dashboard.js: korzysta z window.a8Chart, a nasłuch
-     DOMContentLoaded wykonuje się w kolejności rejestracji. -->
 <script src="{% static 'js/segments.js' %}"></script>
 <script src="{% static 'js/sidebar-panels.js' %}"></script>
 <script src="{% static 'js/mobile-nav.js' %}"></script>
+<script src="{% static 'js/motion3d.js' %}"></script>
 <script src="{% static 'js/fullscreen.js' %}"></script>
 </body>
 </html>

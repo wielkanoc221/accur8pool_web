@@ -17,6 +17,7 @@ from django.utils.text import get_valid_filename
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_POST
 
+from . import motion3d
 from .models import Dataset, Segment, SubSegment
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,12 @@ MAX_UPLOAD_SIZE = 300 * 1024 * 1024
 # To zakres PositiveIntegerField — bez tego sprawdzenia zbłąkane
 # Infinity z JS-a przechodziłoby aż do bazy.
 MAX_ROW_INDEX = 2_147_483_647
+
+# Klatki animacji 3D. 30 fps wystarcza dla ruchu nadgarstka, a scena 3D
+# i tak rzadko rysuje się szybciej.
+DEFAULT_FPS = 30.0
+MIN_FPS = 5.0
+MAX_FPS = 120.0
 
 
 def _user_dir(user):
@@ -207,13 +214,14 @@ def _build_figure(series):
 # ============================================================
 
 def _render_dashboard(request, dataset=None, graph_data=None, columns_count=None,
-                      total_points=None, error=None):
+                      total_points=None, error=None, motion3d_ready=False):
     return render(request, "dashboard.html", {
         "dataset": _dataset_meta(dataset) if dataset else None,
         "graph_data": graph_data,
         "columns_count": columns_count,
         "total_points": total_points,
         "error": error,
+        "motion3d_ready": motion3d_ready,
     })
 
 
@@ -262,6 +270,9 @@ def dashboard(request, filename=None):
         graph_data=fig.to_plotly_json(),
         columns_count=len(series["names"]),
         total_points=series["n"],
+        # Same nazwy kolumn wystarczą, żeby wiedzieć, czy zakładka 3D ma
+        # sens — nie ruszamy dysku drugi raz tylko po to pytanie.
+        motion3d_ready=motion3d.supports(series["names"]),
     )
 
 
@@ -314,6 +325,88 @@ def api_dataset_range(request, filename):
         "total": series["n"],
         "series": _series_payload(series, name_filter, lo, hi, buckets),
     })
+
+
+# ============================================================
+#  ANIMACJA 3D
+# ============================================================
+
+@lru_cache(maxsize=8)
+def _motion3d_cached(path_str, mtime, size, params):
+    """Rekonstrukcja 3D dla jednego zakresu wierszy.
+
+    Kluczem jest (plik, mtime, rozmiar, parametry), więc podmiana pliku
+    unieważnia wpis sama z siebie — tak samo jak w _load_series_cached.
+
+    To jest odpowiedź na pytanie "czy generować animację raz na segment":
+    liczymy ją LENIWIE, przy pierwszym wejściu na zakładkę 3D, ale wynik
+    zostaje tu i w pamięci przeglądarki. Każde kolejne przełączenie na ten
+    sam segment nic już nie liczy. Liczenie z góry, przy tworzeniu każdego
+    segmentu, kosztowałoby CPU także dla segmentów, których nikt nigdy nie
+    obejrzy — a przeglądarka i tak pobiera je w tle zaraz po utworzeniu
+    (motion3d.js), więc efekt dla użytkownika jest ten sam.
+
+    maxsize=8: jeden wpis to kilkadziesiąt–kilkaset kB JSON-a. To rząd
+    wielkości mniej niż ramki w _load_series_cached, ale też nie ma sensu
+    trzymać całej historii sesji.
+    """
+    prep = motion3d.prepare(Path(path_str))
+    return motion3d.build_motion(prep, **dict(params))
+
+
+@login_required
+def api_dataset_motion3d(request, filename):
+    """Scena Plotly + klatki animacji dla zakresu wierszy [x0, x1).
+
+    Czyta surowy CSV przez motion3d.prepare(), a NIE przez _load_series —
+    tam wartości są znormalizowane do 0–1 i jednostki fizyczne już nie
+    istnieją, więc nie dałoby się z nich całkować przyspieszenia.
+    """
+    dataset = _resolve_dataset(request.user, filename)
+    if dataset is None:
+        return JsonResponse({"error": "Nie znaleziono pliku."}, status=404)
+
+    path = _user_dir(request.user) / dataset.filename
+    if not path.exists():
+        return JsonResponse({"error": "Plik nie istnieje na serwerze."}, status=404)
+
+    def num(name, default, cast=float):
+        raw = request.GET.get(name)
+        if raw is None or raw == "":
+            return default
+        return cast(raw)
+
+    def clamp(value, lo, hi):
+        return max(lo, min(value, hi))
+
+    try:
+        params = (
+            ("lo", num("x0", 0, int)),
+            ("hi", num("x1", 0, int)),
+            ("hit_lo", num("hit0", None, int)),
+            ("hit_hi", num("hit1", None, int)),
+            ("fps", clamp(num("fps", DEFAULT_FPS), MIN_FPS, MAX_FPS)),
+            ("tau", clamp(num("tau", 0.7), 0.02, 10.0)),
+            ("hp_hz", clamp(num("hp", 0.4), 0.0, 20.0)),
+            ("lock_axis", request.GET.get("lock") in ("1", "true")),
+            ("watch_scale", clamp(num("watch", 1.0), 0.2, 20.0)),
+            ("pos_scale", clamp(num("posScale", 1.0), 0.1, 50.0)),
+        )
+    except (TypeError, ValueError):
+        return HttpResponseBadRequest("Nieprawidłowe parametry animacji 3D.")
+
+    st = path.stat()
+    try:
+        result = _motion3d_cached(str(path), st.st_mtime_ns, st.st_size, params)
+    except motion3d.Motion3DError as exc:
+        # Dane albo zakres nie pozwalają nic policzyć — to jest odpowiedź
+        # dla użytkownika, nie awaria serwera.
+        return JsonResponse({"error": str(exc)}, status=422)
+    except Exception:
+        logger.exception("Rekonstrukcja 3D nie powiodła się: %s", path)
+        return JsonResponse({"error": "Nie udało się zbudować animacji 3D."}, status=500)
+
+    return JsonResponse(result)
 
 
 # ============================================================

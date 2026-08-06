@@ -12,6 +12,7 @@ urlpatterns = [
     path("api/datasets/", views.api_datasets, name="api_datasets"),
     path("api/datasets/upload/", views.upload_dataset, name="api_upload_dataset"),
     path("api/datasets/<str:filename>/range/", views.api_dataset_range, name="api_dataset_range"),
+    path("api/datasets/<str:filename>/motion3d/", views.api_dataset_motion3d, name="api_dataset_motion3d"),
 
     # Segmenty i fazy. Metoda HTTP wybiera operację (GET/POST oraz
     # PATCH/DELETE/PUT), dlatego jeden wzorzec obsługuje kilka akcji —

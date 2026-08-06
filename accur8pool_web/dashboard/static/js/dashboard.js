@@ -194,6 +194,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     let currentRange = null;     // aktualny zoom albo null przy autorange
     let selectHandler = null;    // funkcja czekająca na zaznaczenie
+    window.getVisibleRange = () => (currentRange ? Object.assign({}, currentRange) : null);
     const cancelListeners = [];
 
     // Nasłuch dotyczy WYŁĄCZNIE anulowania (Escape, cancelSelect). O udanym
