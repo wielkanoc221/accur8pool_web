@@ -118,4 +118,10 @@ document.addEventListener('DOMContentLoaded', function () {
     window.addEventListener('resize', function () {
         if (window.innerWidth > 768) closeAll();
     });
+
+    // Udostępnione dla segments.js: włączenie trybu zaznaczania musi zwinąć
+    // panel segmentów, bo na telefonie zasłania on wykres, po którym trzeba
+    // przeciągnąć. Na desktopie ta funkcja nic nie zmienia — panele mobilne
+    // nie są tam otwarte.
+    window.a8CloseMobilePanels = closeAll;
 });

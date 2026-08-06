@@ -1,11 +1,16 @@
 /* ============================================================
-   ACCUR8POOL — wykres, segmenty, doczytywanie rozdzielczości
+   ACCUR8POOL — wykres i doczytywanie rozdzielczości
 
    Wykres startuje w rozdzielczości ekranu (decymacja min/max po
    stronie serwera). Po każdym zoomie dociągamy z serwera wycinek
    dla widocznego zakresu — im głębiej przybliżysz, tym mniej
    wierszy wpada do jednego kubełka, aż w końcu dostajesz surowe
    próbki. Nic, co byłoby widoczne, nie jest gubione.
+
+   Ten plik NIE wie nic o segmentach. Wystawia window.a8Chart —
+   cienkie API do wykresu (zoom, zaznaczanie zakresu, prostokąty),
+   z którego korzysta segments.js. Podział jest celowy: rysowanie
+   i decymacja zmieniają się z innych powodów niż model segmentów.
    ============================================================ */
 
 document.addEventListener('DOMContentLoaded', function () {
@@ -34,6 +39,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const normalizedDefaults = DEFAULT_VISIBLE_COLUMNS.map(normalize);
 
     let plotReady = false;
+    const readyListeners = [];
+
+    function markReady() {
+        plotReady = true;
+        readyListeners.splice(0).forEach(cb => {
+            try { cb(); } catch (err) { console.error(err); }
+        });
+    }
 
     // ---------- inicjalizacja ----------
     if (graphDiv && fig && Array.isArray(fig.data)) {
@@ -57,7 +70,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 responsive: true,
                 displayModeBar: false,
                 scrollZoom: true
-            }).then(() => { plotReady = true; });
+            }).then(markReady);
         }
     }
 
@@ -167,10 +180,58 @@ document.addEventListener('DOMContentLoaded', function () {
         pending = setTimeout(() => refine(x0, x1), 220);
     }
 
-    // ---------- stan segmentów ----------
-    let currentRange = null;
-    const segments = [];
-    let activeSegmentId = null;
+    const FULL_RANGE = Number.MAX_SAFE_INTEGER / 2;
+
+    // ============================================================
+    //  ZAZNACZANIE ZAKRESU
+    //
+    //  dragmode 'select' + selectdirection 'h' daje poziomą ramkę
+    //  zaznaczenia i zdarzenie plotly_selected z granicami na osi X.
+    //  Zaletą względem „weź granice z aktualnego zoomu” jest to, że
+    //  można zaznaczyć kilka zakresów bez ruszania widoku — a przy
+    //  dziesiątkach uderzeń w jednym nagraniu to podstawowy sposób pracy.
+    // ============================================================
+
+    let currentRange = null;     // aktualny zoom albo null przy autorange
+    let selectHandler = null;    // funkcja czekająca na zaznaczenie
+    const cancelListeners = [];
+
+    // Nasłuch dotyczy WYŁĄCZNIE anulowania (Escape, cancelSelect). O udanym
+    // zaznaczeniu wołający dowiaduje się ze swojego callbacku i tylko tam —
+    // gdyby powiadomienie leciało też wtedy, wołający zdążyłby wyzerować
+    // swój stan przed wykonaniem callbacku i zaznaczenie przepadłoby.
+    function notifyCancelled() {
+        cancelListeners.forEach(cb => {
+            try { cb(); } catch (err) { console.error(err); }
+        });
+    }
+
+    function clearSelectionArtifacts() {
+        if (!plotReady) return;
+        // 'selections: []' usuwa narysowaną ramkę, restyle przywraca pełną
+        // jasność serii — Plotly w trybie zaznaczania przygasza punkty poza
+        // ramką i bez tego wykres zostaje wyblakły.
+        Promise.resolve()
+            .then(() => Plotly.relayout(graphDiv, { dragmode: 'zoom', selections: [] }))
+            .then(() => Plotly.restyle(graphDiv, { selectedpoints: null }))
+            .catch(err => console.warn('Nie udało się wyczyścić zaznaczenia:', err));
+    }
+
+    function beginSelect(onPick) {
+        if (!plotReady) return false;
+        selectHandler = onPick;
+        graphDiv.classList.add('is-selecting');
+        Plotly.relayout(graphDiv, { dragmode: 'select', selectdirection: 'h' });
+        return true;
+    }
+
+    function cancelSelect() {
+        if (!selectHandler) return;
+        selectHandler = null;
+        graphDiv.classList.remove('is-selecting');
+        clearSelectionArtifacts();
+        notifyCancelled();
+    }
 
     if (graphDiv && typeof graphDiv.on === 'function') {
 
@@ -182,7 +243,7 @@ document.addEventListener('DOMContentLoaded', function () {
                 scheduleRefine(x0, x1);
             } else if (event['xaxis.autorange'] === true) {
                 currentRange = null;
-                scheduleRefine(0, Number.MAX_SAFE_INTEGER / 2);
+                scheduleRefine(0, FULL_RANGE);
             }
         });
 
@@ -191,113 +252,91 @@ document.addEventListener('DOMContentLoaded', function () {
             setTimeout(() => {
                 lastRequest = null;
                 const r = currentRange;
-                scheduleRefine(r ? r.x0 : 0, r ? r.x1 : Number.MAX_SAFE_INTEGER / 2);
+                scheduleRefine(r ? r.x0 : 0, r ? r.x1 : FULL_RANGE);
             }, 60);
         });
-    }
 
-    // ---------- segmenty ----------
-    const createBtn = document.getElementById('create');
-    const listEl = document.getElementById('segment_list');
-    const countEl = document.getElementById('seg-count');
+        graphDiv.on('plotly_selected', function (event) {
+            if (!selectHandler) return;
+            // Zdarzenie bez zakresu to wyczyszczenie zaznaczenia (podwójne
+            // kliknięcie), a nie wybór — tryb zostaje włączony.
+            if (!event || !event.range || !event.range.x) return;
 
-    if (createBtn) {
-        createBtn.addEventListener('click', function () {
-            if (!plotReady) return;
-            if (!currentRange) {
-                alert('Najpierw przybliż fragment wykresu (zoom), aby zdefiniować zakres segmentu.');
-                return;
-            }
-            const name = prompt('Nazwa segmentu:');
-            if (!name || !name.trim()) return;
+            const handler = selectHandler;
+            const x = event.range.x;
 
-            segments.push({
-                id: Date.now(),
-                name: name.trim(),
-                x0: Math.min(currentRange.x0, currentRange.x1),
-                x1: Math.max(currentRange.x0, currentRange.x1),
-                color: '#3b82f6'
-            });
-            activeSegmentId = segments[segments.length - 1].id;
-            renderSegments();
-            drawSegments();
-            updateCount();
+            selectHandler = null;
+            graphDiv.classList.remove('is-selecting');
+            // Sprzątanie po Plotly odkładamy poza jego własny handler —
+            // relayout wołany w trakcie obsługi zdarzenia bywa gubiony.
+            setTimeout(clearSelectionArtifacts, 0);
+
+            handler({ x0: Math.min(x[0], x[1]), x1: Math.max(x[0], x[1]) });
         });
     }
 
-    function renderSegments() {
-        if (!listEl) return;
-
-        if (segments.length === 0) {
-            listEl.innerHTML =
-                '<div class="empty-state"><div class="empty-state-icon">✂️</div>' +
-                '<p>Brak segmentów.<br>Zdefiniuj pierwszy zakres na wykresie.</p></div>';
-            return;
-        }
-
-        listEl.innerHTML = segments.map(seg => `
-            <div class="segment-item ${seg.id === activeSegmentId ? 'active' : ''}" data-id="${seg.id}">
-                <div class="seg-color" style="background:${seg.color}"></div>
-                <div class="seg-info">
-                    <div class="seg-name">${escapeHtml(seg.name)}</div>
-                    <div class="seg-range">${seg.x0.toFixed(1)} – ${seg.x1.toFixed(1)}</div>
-                </div>
-                <div class="seg-actions">
-                    <button type="button" class="seg-btn" data-action="delete" title="Usuń">×</button>
-                </div>
-            </div>
-        `).join('');
-    }
-
-    if (listEl) {
-        listEl.addEventListener('click', function (e) {
-            const item = e.target.closest('.segment-item');
-            if (!item) return;
-            const id = Number(item.dataset.id);
-
-            if (e.target.closest('[data-action="delete"]')) {
-                const i = segments.findIndex(s => s.id === id);
-                if (i > -1) {
-                    segments.splice(i, 1);
-                    if (activeSegmentId === id) activeSegmentId = null;
-                    renderSegments();
-                    drawSegments();
-                    updateCount();
-                }
-                return;
-            }
-
-            activeSegmentId = id;
-            renderSegments();
-            drawSegments();
-        });
-    }
-
-    function drawSegments() {
-        if (!plotReady) return;
-        Plotly.relayout(graphDiv, {
-            shapes: segments.map(seg => ({
-                type: 'rect', x0: seg.x0, x1: seg.x1, y0: 0, y1: 1, yref: 'paper',
-                fillcolor: seg.id === activeSegmentId
-                    ? 'rgba(59, 130, 246, 0.22)'
-                    : 'rgba(148, 163, 184, 0.10)',
-                line: { width: 0 }, layer: 'below'
-            }))
-        });
-    }
-
-    function updateCount() {
-        if (countEl) countEl.textContent = segments.length;
-    }
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') cancelSelect();
+    });
 
     window.resetZoom = function () {
         if (!plotReady) return;
         Plotly.relayout(graphDiv, { 'xaxis.autorange': true, 'yaxis.autorange': true });
     };
 
-    function escapeHtml(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
-    }
+    // ============================================================
+    //  API DLA segments.js
+    //  Skrypty ładowane PO dashboard.js (segments.js, fullscreen.js)
+    //  mogą na tym polegać — nasłuch DOMContentLoaded jest rejestrowany
+    //  wcześniej, więc wykonuje się wcześniej.
+    // ============================================================
+    window.a8Chart = {
+        div: graphDiv,
+        datasetId: datasetId,
+
+        isReady: () => plotReady,
+
+        /** Wywołuje cb, gdy wykres jest gotowy (od razu, jeśli już jest).
+         *  Przy braku wykresu cb nie zostanie wywołane nigdy. */
+        onReady(cb) {
+            plotReady ? cb() : readyListeners.push(cb);
+        },
+
+        /** Aktualny zakres osi X albo null, gdy widać cały przebieg. */
+        getRange: () => currentRange,
+
+        /** Przybliża do [x0, x1] z marginesem, żeby zakres nie kleił się
+         *  do krawędzi wykresu. */
+        zoomTo(x0, x1, padRatio) {
+            if (!plotReady) return;
+            const ratio = padRatio === undefined ? 0.18 : padRatio;
+            const pad = Math.max((x1 - x0) * ratio, 1);
+            Plotly.relayout(graphDiv, {
+                'xaxis.range[0]': x0 - pad,
+                'xaxis.range[1]': x1 + pad
+            });
+        },
+
+        /** Włącza tryb zaznaczania. onPick({x0, x1}) leci raz; tryb
+         *  wyłącza się sam, a ponowne uzbrojenie należy do wołającego. */
+        beginSelect,
+        cancelSelect,
+        isSelecting: () => selectHandler !== null,
+
+        /** Powiadomienie o ANULOWANIU trybu zaznaczania — głównie o tym,
+         *  które przyszło z Escape, bo wołający o nim nie wie. Udane
+         *  zaznaczenie zgłasza się przez callback z beginSelect. */
+        onSelectCancelled(cb) {
+            cancelListeners.push(cb);
+        },
+
+        /** Podmienia wszystkie prostokąty na wykresie. relayout z samymi
+         *  shapes nie rusza zoomu ani widoczności serii. */
+        setShapes(shapes) {
+            if (!plotReady) return;
+            Plotly.relayout(graphDiv, { shapes: shapes });
+        },
+
+        resetZoom: () => window.resetZoom()
+    };
 });

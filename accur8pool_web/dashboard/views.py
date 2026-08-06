@@ -1,3 +1,4 @@
+import json
 import logging
 import math
 from functools import lru_cache
@@ -10,13 +11,13 @@ import plotly.graph_objects as go
 from django.conf import settings
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
-from django.http import JsonResponse, HttpResponseBadRequest
+from django.http import JsonResponse, HttpResponseBadRequest, HttpResponseNotAllowed
 from django.shortcuts import render, redirect
 from django.utils.text import get_valid_filename
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_POST
 
-from .models import Dataset
+from .models import Dataset, Segment, SubSegment
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,11 @@ DATA_DIR = Path(
 TARGET_BUCKETS = 2500
 
 MAX_UPLOAD_SIZE = 300 * 1024 * 1024
+
+# Górna granica numeru wiersza przyjmowanego w granicach segmentu.
+# To zakres PositiveIntegerField — bez tego sprawdzenia zbłąkane
+# Infinity z JS-a przechodziłoby aż do bazy.
+MAX_ROW_INDEX = 2_147_483_647
 
 
 def _user_dir(user):
@@ -309,6 +315,245 @@ def api_dataset_range(request, filename):
         "series": _series_payload(series, name_filter, lo, hi, buckets),
     })
 
+
+# ============================================================
+#  SEGMENTY I FAZY
+#
+#  Struktura: Dataset → Segment (uderzenie) → SubSegment (faza).
+#  Granice wszędzie to numery wierszy CSV, tak samo jak oś X wykresu.
+#
+#  Wszystkie cztery endpointy zwracają PEŁNĄ listę segmentów, także po
+#  zapisie i po usunięciu. Bierze się to z tego, że numer segmentu nie
+#  jest zapisany w bazie, a wyliczony z kolejności na osi czasu (patrz
+#  docstring modelu Segment): dodanie uderzenia w środku nagrania
+#  przenumerowuje wszystkie późniejsze. Zwracanie całej listy jest tu
+#  tańsze niż powtarzanie tej samej logiki w przeglądarce, a lista ma
+#  rozmiar kilkudziesięciu rekordów, nie kilkudziesięciu tysięcy.
+# ============================================================
+
+def _json_body(request):
+    """Ciało żądania jako dict. None = nie da się sparsować."""
+    try:
+        payload = json.loads(request.body or b"{}")
+    except (ValueError, UnicodeDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _parse_range(payload):
+    """Waliduje {"start": .., "end": ..} → ((start, end), None) albo (None, błąd).
+
+    Z przeglądarki przychodzą liczby zmiennoprzecinkowe (granice
+    zaznaczenia na wykresie rzadko wypadają dokładnie na wierszu), więc
+    zaokrąglamy „na zewnątrz”: start w dół, end w górę. Zaznaczenie
+    zrobione od prawej do lewej ma start > end i po prostu je zamieniamy —
+    dla użytkownika kierunek przeciągania nie powinien mieć znaczenia.
+    """
+    try:
+        start = float(payload["start"])
+        end = float(payload["end"])
+    except (KeyError, TypeError, ValueError):
+        return None, "Wymagane są liczbowe pola 'start' i 'end'."
+
+    if not (math.isfinite(start) and math.isfinite(end)):
+        return None, "Granice zakresu muszą być skończonymi liczbami."
+
+    start, end = math.floor(min(start, end)), math.ceil(max(start, end))
+    start = max(int(start), 0)
+    end = int(end)
+
+    if end <= start:
+        return None, "Zakres musi obejmować co najmniej jeden wiersz."
+    if end > MAX_ROW_INDEX:
+        return None, "Zakres wykracza poza dopuszczalny numer wiersza."
+
+    return (start, end), None
+
+
+def _segments_payload(dataset):
+    """Segmenty datasetu z fazami, gotowe do wysłania jako JSON."""
+    segments = Segment.objects.filter(dataset=dataset).prefetch_related("subsegments")
+
+    # Fazy sortujemy po ich naturalnej kolejności w uderzeniu, a nie po
+    # zaznaczonym zakresie: panel ma pokazywać przygotowanie → przymierzanie
+    # → uderzenie → po uderzeniu również wtedy, gdy zostały zaznaczone
+    # w innej kolejności albo gdy jedna z nich jest jeszcze pusta.
+    phase_rank = {key: i for i, key in enumerate(SubSegment.PHASE_ORDER)}
+
+    out = []
+    for number, segment in enumerate(segments, start=1):
+        phases = sorted(
+            segment.subsegments.all(),
+            key=lambda sub: phase_rank.get(sub.phase, len(phase_rank)),
+        )
+        out.append({
+            "id": segment.pk,
+            "number": number,
+            "name": str(number),
+            "start": segment.start,
+            "end": segment.end,
+            "length": segment.length,
+            "phases": [
+                {
+                    "id": sub.pk,
+                    "phase": sub.phase,
+                    "label": sub.get_phase_display(),
+                    "start": sub.start,
+                    "end": sub.end,
+                    "length": sub.length,
+                }
+                for sub in phases
+            ],
+        })
+    return out
+
+
+def _segments_response(dataset, status=200):
+    return JsonResponse({
+        "segments": _segments_payload(dataset),
+        # Lista faz idzie razem z danymi, żeby przeglądarka nie musiała
+        # trzymać własnej kopii nazw — modele są tu jedynym źródłem prawdy.
+        "phase_types": [
+            {"key": key, "label": label} for key, label in SubSegment.PHASE_CHOICES
+        ],
+    }, status=status)
+
+
+def _segment_or_error(user, filename, segment_id=None):
+    """(dataset, segment, odpowiedź_błędu). Segment jest szukany zawsze
+    w obrębie datasetu użytkownika, więc samo podanie obcego id nic nie da."""
+    dataset = _resolve_dataset(user, filename)
+    if dataset is None:
+        return None, None, JsonResponse({"error": "Nie znaleziono pliku."}, status=404)
+
+    if segment_id is None:
+        return dataset, None, None
+
+    segment = Segment.objects.filter(dataset=dataset, pk=segment_id).first()
+    if segment is None:
+        return dataset, None, JsonResponse({"error": "Nie znaleziono segmentu."}, status=404)
+
+    return dataset, segment, None
+
+
+@login_required
+def api_segments(request, filename):
+    """GET — lista segmentów, POST — nowy segment z {"start", "end"}."""
+    dataset, _, error = _segment_or_error(request.user, filename)
+    if error:
+        return error
+
+    if request.method == "GET":
+        return _segments_response(dataset)
+
+    if request.method != "POST":
+        return HttpResponseNotAllowed(["GET", "POST"])
+
+    payload = _json_body(request)
+    if payload is None:
+        return JsonResponse({"error": "Nieprawidłowe dane żądania."}, status=400)
+
+    bounds, message = _parse_range(payload)
+    if message:
+        return JsonResponse({"error": message}, status=400)
+
+    Segment.objects.create(dataset=dataset, start=bounds[0], end=bounds[1])
+    return _segments_response(dataset, status=201)
+
+
+@login_required
+def api_segment_detail(request, filename, segment_id):
+    """PATCH — poprawia zakres segmentu, DELETE — usuwa go wraz z fazami
+    (kaskada z ForeignKey)."""
+    dataset, segment, error = _segment_or_error(request.user, filename, segment_id)
+    if error:
+        return error
+
+    if request.method == "DELETE":
+        segment.delete()
+        return _segments_response(dataset)
+
+    if request.method != "PATCH":
+        return HttpResponseNotAllowed(["PATCH", "DELETE"])
+
+    payload = _json_body(request)
+    if payload is None:
+        return JsonResponse({"error": "Nieprawidłowe dane żądania."}, status=400)
+
+    bounds, message = _parse_range(payload)
+    if message:
+        return JsonResponse({"error": message}, status=400)
+
+    segment.start, segment.end = bounds
+    segment.save(update_fields=["start", "end"])
+
+    # Zawężenie segmentu mogło wypchnąć fazy poza jego granice — przycinamy
+    # je do nowego zakresu, a te, które wypadły z niego całkowicie, znikają.
+    # Bez tego na wykresie zostałyby prostokąty faz wystające poza uderzenie,
+    # do którego należą.
+    for sub in segment.subsegments.all():
+        start = max(sub.start, segment.start)
+        end = min(sub.end, segment.end)
+        if end <= start:
+            sub.delete()
+        elif (start, end) != (sub.start, sub.end):
+            sub.start, sub.end = start, end
+            sub.save(update_fields=["start", "end"])
+
+    return _segments_response(dataset)
+
+
+@login_required
+def api_segment_phase(request, filename, segment_id, phase):
+    """PUT — ustawia albo poprawia zakres jednej fazy, DELETE — czyści ją.
+
+    PUT, nie POST, bo faza jest identyfikowana swoją nazwą: to samo
+    żądanie wysłane dwa razy daje ten sam stan, a powtórne zaznaczenie
+    fazy poprawia istniejący wpis zamiast tworzyć drugi.
+    """
+    dataset, segment, error = _segment_or_error(request.user, filename, segment_id)
+    if error:
+        return error
+
+    if phase not in dict(SubSegment.PHASE_CHOICES):
+        return JsonResponse({"error": "Nieznana faza."}, status=400)
+
+    if request.method == "DELETE":
+        SubSegment.objects.filter(segment=segment, phase=phase).delete()
+        return _segments_response(dataset)
+
+    if request.method != "PUT":
+        return HttpResponseNotAllowed(["PUT", "DELETE"])
+
+    payload = _json_body(request)
+    if payload is None:
+        return JsonResponse({"error": "Nieprawidłowe dane żądania."}, status=400)
+
+    bounds, message = _parse_range(payload)
+    if message:
+        return JsonResponse({"error": message}, status=400)
+
+    # Faza jest częścią uderzenia, więc nie może z niego wystawać.
+    # Zaznaczenie „z zapasem” przycinamy do granic segmentu — odrzucamy
+    # dopiero takie, które w ogóle nie zahacza o segment.
+    start = max(bounds[0], segment.start)
+    end = min(bounds[1], segment.end)
+    if end <= start:
+        return JsonResponse(
+            {"error": "Zaznaczony zakres leży poza segmentem."}, status=400
+        )
+
+    SubSegment.objects.update_or_create(
+        segment=segment,
+        phase=phase,
+        defaults={"start": start, "end": end},
+    )
+    return _segments_response(dataset)
+
+
+# ============================================================
+#  ZESTAWY DANYCH
+# ============================================================
 
 @login_required
 @ensure_csrf_cookie

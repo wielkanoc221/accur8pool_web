@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="{% static 'css/dashboard.css' %}">
     <link rel="stylesheet" href="{% static 'css/sidebar.css' %}">
     <link rel="stylesheet" href="{% static 'css/datasets.css' %}">
+    <link rel="stylesheet" href="{% static 'css/segments.css' %}">
     <link rel="stylesheet" href="{% static 'css/mobile.css' %}">
     <link rel="stylesheet" href="{% static 'css/fullscreen.css' %}">
 </head>
@@ -176,16 +177,27 @@
         </div>
 
         <!-- ---------- PRAWY PANEL: SEGMENTY ----------
-             Na telefonie mobile.css zamienia go w panel wysuwany z dołu,
+             Dwa widoki w jednej karcie: lista uderzeń i fazy wybranego
+             uderzenia. Przełącza je segments.js atrybutem hidden, całą
+             treść list też renderuje on — tutaj jest tylko szkielet.
+
+             Na telefonie mobile.css zamienia panel w wysuwany z dołu,
              otwierany przyciskiem w dolnym pasku (mobile-nav.js). -->
         <aside class="right-sidebar" id="segments-panel">
 
             <div class="card segment-card">
                 <div class="card-header">
-                    <div>
-                        <div class="card-title">Segmenty</div>
-                        <div class="card-subtitle">
-                            Zdefiniowane zakresy: <span id="seg-count">0</span>
+                    <div class="seg-header-main">
+                        <button type="button"
+                                class="seg-back"
+                                id="seg-back"
+                                hidden
+                                aria-label="Wróć do listy segmentów">←</button>
+                        <div>
+                            <div class="card-title" id="seg-title">Segmenty</div>
+                            <div class="card-subtitle" id="seg-subtitle">
+                                Zaznaczone uderzenia: <span id="seg-count">0</span>
+                            </div>
                         </div>
                     </div>
                     <button type="button"
@@ -194,26 +206,30 @@
                             aria-label="Zamknij panel segmentów">×</button>
                 </div>
                 <div class="card-body">
-                    <div class="hint">
+                    <div class="hint" id="seg-hint">
                         <span aria-hidden="true">💡</span>
-                        <span>Przybliż fragment wykresu, potem dodaj segment.</span>
+                        <span id="seg-hint-text">
+                            Zaznacz uderzenie przeciągnięciem po wykresie.
+                        </span>
                     </div>
 
-                    <div class="segment-toolbar">
-                        <button type="button" class="btn btn-primary btn-sm" id="create">
-                            <span aria-hidden="true">✂️</span> Nowy segment
+                    <div class="segment-toolbar" id="seg-toolbar">
+                        <button type="button" class="btn btn-primary btn-sm" id="seg-mark">
+                            <span aria-hidden="true">✂️</span>
+                            <span id="seg-mark-label">Zaznacz uderzenie</span>
                         </button>
-                        <button type="button" class="btn btn-ghost btn-sm" onclick="window.resetZoom()">
+                        <button type="button" class="btn btn-ghost btn-sm" id="seg-reset">
                             <span aria-hidden="true">🔍</span> Reset
                         </button>
                     </div>
 
-                    <div class="segment-list" id="segment_list">
-                        <div class="empty-state">
-                            <div class="empty-state-icon">✂️</div>
-                            <p>Brak segmentów.<br>Zdefiniuj pierwszy zakres na wykresie.</p>
-                        </div>
-                    </div>
+                    <div class="seg-error" id="seg-error" hidden></div>
+
+                    <!-- WIDOK 1: lista uderzeń -->
+                    <div class="segment-list" id="seg-list"></div>
+
+                    <!-- WIDOK 2: fazy wybranego uderzenia -->
+                    <div class="phase-view" id="seg-detail" hidden></div>
                 </div>
             </div>
 
@@ -221,9 +237,12 @@
                 <div class="card-body">
                     <div class="info-title">Jak to działa</div>
                     <div class="info-text">
-                        Zaznacz na wykresie interesujący cię przedział,
-                        a następnie zapisz go jako segment. Segmenty pozostają
-                        widoczne na wykresie także po zmianie zoomu.
+                        Kliknij „Zaznacz uderzenie” i przeciągnij po wykresie —
+                        segment dostanie kolejny numer. Kliknięcie segmentu
+                        pokazuje go na wykresie i otwiera jego cztery fazy:
+                        przygotowanie, przymierzanie, uderzenie i okres po
+                        uderzeniu. Każdą z nich zaznaczasz osobno wewnątrz
+                        segmentu. Wszystko zapisuje się na serwerze.
                     </div>
                 </div>
             </div>
@@ -249,6 +268,9 @@
 <script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 <script src="{% static 'js/upload.js' %}"></script>
 <script src="{% static 'js/dashboard.js' %}"></script>
+<!-- segments.js po dashboard.js: korzysta z window.a8Chart, a nasłuch
+     DOMContentLoaded wykonuje się w kolejności rejestracji. -->
+<script src="{% static 'js/segments.js' %}"></script>
 <script src="{% static 'js/sidebar-panels.js' %}"></script>
 <script src="{% static 'js/mobile-nav.js' %}"></script>
 <script src="{% static 'js/fullscreen.js' %}"></script>

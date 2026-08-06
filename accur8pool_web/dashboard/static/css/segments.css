@@ -1,0 +1,347 @@
+/* ============================================================
+   ACCUR8POOL — panel segmentów i faz
+   Ładuj PO dashboard.css (nadpisuje część reguł .segment-*),
+   a PRZED mobile.css (tam są poprawki dotykowe).
+
+   Panel ma dwa widoki w jednej karcie: listę uderzeń i fazy jednego
+   z nich. Przełącza je JS atrybutem hidden, żeby nie budować drugiej
+   karty i nie skakać wysokością.
+   ============================================================ */
+
+/* ============================================
+   hidden MUSI WYGRYWAĆ
+
+   Reguła `[hidden] { display: none }` pochodzi z arkusza przeglądarki,
+   więc przegrywa z KAŻDĄ regułą autorską ustawiającą display — a panel
+   przełącza widoki właśnie atrybutem hidden, na elementach, które mają
+   display: flex (.segment-toolbar, .segment-list, .hint, .seg-back).
+   Bez tego jednego wiersza schowane bloki zostają na ekranie.
+   ============================================ */
+[hidden] { display: none !important; }
+
+/* ============================================
+   NAGŁÓWEK Z PRZYCISKIEM POWROTU
+   ============================================ */
+.seg-header-main {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+}
+
+.seg-back {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    border: 1px solid var(--border);
+    background: var(--bg-card);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    font-size: 15px;
+    line-height: 1;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.seg-back:hover {
+    background: var(--accent-light);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+/* ============================================
+   PODPOWIEDŹ I BŁĄD
+   ============================================ */
+
+/* Tryb zaznaczania: podpowiedź przestaje być szarym drobnym drukiem,
+   bo w tym momencie to jedyna informacja o tym, co zrobi przeciągnięcie
+   po wykresie. */
+.hint.is-armed {
+    background: var(--accent-light);
+    border-color: var(--accent);
+    border-style: solid;
+    color: var(--accent-hover);
+    font-weight: 500;
+}
+
+.seg-error {
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+    border-radius: var(--radius-sm);
+    background: var(--danger-bg);
+    border: 1px solid #fecaca;
+    color: #991b1b;
+}
+
+/* ============================================
+   PRZYCISKI
+   ============================================ */
+
+/* Uzbrojony tryb zaznaczania — przycisk pokazuje „Anuluj”, więc musi
+   przestać wyglądać jak akcja główna. */
+.btn.is-armed {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+    box-shadow: none;
+}
+
+.btn.is-armed:hover {
+    background: #dc2626;
+    border-color: #dc2626;
+    transform: none;
+}
+
+/* dashboard.css daje obu przyciskom paska flex: 1, ale „Zaznacz uderzenie”
+   jest dwa razy dłuższe niż „Reset” i przy szerokości panelu zawijało się
+   na dwie linie. */
+.segment-toolbar #seg-mark { flex: 2; }
+.segment-toolbar #seg-reset { flex: 1; }
+
+.btn-danger-ghost { color: var(--danger); }
+
+.btn-danger-ghost:hover {
+    background: var(--danger-bg);
+    border-color: #fecaca;
+    color: #b91c1c;
+}
+
+.seg-btn-danger:hover {
+    background: var(--danger-bg);
+    color: var(--danger);
+}
+
+/* ============================================
+   LISTA SEGMENTÓW
+   ============================================ */
+/* Wiersz jest klikalny w całości (wejście w fazy), więc nie może
+   wyglądać jak zaznaczalny tekst. */
+.segment-item { user-select: none; }
+
+.segment-item:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+/* Kropki faz: cztery pastylki pokazujące, co w tym uderzeniu jest już
+   zaznaczone — bez wchodzenia w szczegóły. */
+.phase-dots {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 6px;
+}
+
+.phase-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: transparent;
+    border: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.phase-dots-label {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-left: 4px;
+    font-variant-numeric: tabular-nums;
+}
+
+/* ============================================
+   SZCZEGÓŁY SEGMENTU
+   ============================================ */
+.seg-detail-head {
+    padding: 12px 14px;
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-hover);
+}
+
+.seg-detail-range {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    font-variant-numeric: tabular-nums;
+    margin-bottom: 12px;
+}
+
+.seg-detail-range strong {
+    font-size: 14px;
+    color: var(--text-primary);
+}
+
+.seg-detail-range span {
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.seg-detail-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.seg-detail-actions .btn {
+    flex: 1 1 auto;
+    justify-content: center;
+    background: var(--bg-card);
+}
+
+.phase-section-title {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-muted);
+    margin-bottom: 8px;
+}
+
+/* ============================================
+   LISTA FAZ
+   ============================================ */
+.phase-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+/* Cztery wiersze są zawsze te same — ustawione i nieustawione fazy
+   stoją w tym samym miejscu. Puste są wyblakłe, więc jednym spojrzeniem
+   widać, czego jeszcze brakuje. */
+.phase-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-card);
+    transition: var(--transition);
+}
+
+.phase-item:not(.is-set) { background: var(--bg-hover); }
+
+.phase-item:not(.is-set) .phase-swatch { opacity: 0.3; }
+
+.phase-item:not(.is-set) .phase-range {
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.phase-item.is-armed {
+    border-color: var(--accent);
+    background: var(--accent-light);
+    box-shadow: var(--shadow-sm);
+}
+
+.phase-swatch {
+    width: 4px;
+    height: 26px;
+    border-radius: 2px;
+    flex-shrink: 0;
+}
+
+.phase-info { flex: 1; min-width: 0; }
+
+.phase-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.phase-range {
+    font-size: 11px;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+}
+
+.phase-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+}
+
+.phase-btn {
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg-card);
+    color: var(--text-secondary);
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.phase-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.phase-btn.is-armed {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+}
+
+/* ============================================
+   WYKRES W TRYBIE ZAZNACZANIA
+   ============================================ */
+
+/* Kursor zmienia Plotly, ale sam wykres wygląda tak samo jak przy
+   zoomie — obwódka mówi, że przeciągnięcie zapisze zakres, a nie
+   przybliży widok.
+
+   Musi to być warstwa ::after, a nie box-shadow ani tło: SVG Plotly ma
+   własne białe tło i zamalowuje wszystko, co narysuje sam #graph.
+   #graph ma position: relative z dashboard.css, więc inset: 0 wystarcza. */
+#graph.is-selecting::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border: 2px solid var(--accent);
+    border-radius: var(--radius-sm);
+    pointer-events: none;   /* przeciąganie musi trafiać do wykresu, nie tutaj */
+}
+
+/* ============================================
+   TELEFON
+   ============================================ */
+@media (max-width: 768px) {
+
+    /* Cele dotykowe — 44 px to minimum z wytycznych dostępności */
+    .phase-item { padding: 12px; }
+
+    .phase-btn {
+        min-height: 34px;
+        padding: 7px 14px;
+        font-size: 12px;
+    }
+
+    .seg-back {
+        width: 34px;
+        height: 34px;
+        font-size: 17px;
+    }
+
+    .seg-detail-actions .btn {
+        min-height: 38px;
+        flex: 1 1 100px;
+    }
+
+    /* Podpowiedź w trybie zaznaczania musi zostać widoczna także tutaj —
+       panel zwija się przy uzbrojeniu, ale po powrocie do niego to
+       jedyna informacja o stanie. */
+    .hint.is-armed { font-size: 12px; }
+}
