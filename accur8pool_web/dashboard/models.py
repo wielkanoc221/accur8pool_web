@@ -88,6 +88,18 @@ class SubSegment(models.Model):
 
     PHASE_ORDER = [key for key, _ in PHASE_CHOICES]
 
+    # Kolor fazy jest tutaj, a nie w CSS-ie ani w JS-ie, bo używają go
+    # DWA niezależne widoki: prostokąty na wykresie 2D (segments.js)
+    # i podświetlenie toru w animacji 3D (motion3d.py rysuje je po stronie
+    # serwera). Trzymanie dwóch kopii kończyło się tym, że ta sama faza
+    # miała inny kolor w każdej zakładce.
+    PHASE_COLORS = {
+        PHASE_PREPARATION: "#f59e0b",
+        PHASE_ADDRESSING: "#8b5cf6",
+        PHASE_STRIKE: "#ef4444",
+        PHASE_FOLLOW_THROUGH: "#10b981",
+    }
+
     segment = models.ForeignKey(
         Segment,
         on_delete=models.CASCADE,

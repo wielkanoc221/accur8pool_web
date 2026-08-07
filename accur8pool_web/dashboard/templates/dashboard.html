@@ -209,9 +209,12 @@
                             </div>
                         </div>
                         <div class="card-actions">
+                            <!-- Lista uzupełnia się z segments.js (window.a8Segments).
+                                 Animować da się tylko zaznaczone uderzenie, więc
+                                 nie ma tu pozycji „widoczny zakres wykresu”. -->
                             <select id="m3d-source" class="m3d-select"
-                                    aria-label="Zakres do animacji">
-                                <option value="view">Widoczny zakres wykresu</option>
+                                    aria-label="Uderzenie do animacji" disabled>
+                                <option value="">Ładowanie segmentów…</option>
                             </select>
                             <button type="button"
                                     class="btn btn-ghost btn-sm"
@@ -245,6 +248,10 @@
                                    min="0" max="1" step="0.001" value="0"
                                    aria-label="Pozycja w nagraniu" disabled>
                             <span class="m3d-clock" id="m3d-clock">0.00 / 0.00 s</span>
+                            <!-- Nazwa fazy, która akurat trwa. Tło dostaje
+                                 kolor tej fazy — ten sam, którym jest
+                                 podświetlony tor na scenie 3D. -->
+                            <span class="m3d-phase" id="m3d-phase" hidden></span>
                             <span class="m3d-perf" id="m3d-perf"></span>
                         </div>
 

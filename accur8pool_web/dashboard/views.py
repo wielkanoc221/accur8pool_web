@@ -35,11 +35,18 @@ MAX_UPLOAD_SIZE = 300 * 1024 * 1024
 # Infinity z JS-a przechodziłoby aż do bazy.
 MAX_ROW_INDEX = 2_147_483_647
 
-# Klatki animacji 3D. 30 fps wystarcza dla ruchu nadgarstka, a scena 3D
-# i tak rzadko rysuje się szybciej.
-DEFAULT_FPS = 30.0
+# Klatki animacji 3D. `fps` NIE jest tempem docelowym, tylko GÓRNYM
+# LIMITEM gęstości próbek (patrz docstring motion3d.build_motion): klatka
+# to zawsze prawdziwy wiersz CSV, a limit decyduje tylko o tym, czy przy
+# szybkim zapisie brać co drugą albo co czwartą.
+#
+# Bez parametru w zapytaniu limitu NIE MA (0 = brak). Przeglądarka celowo
+# go nie wysyła, bo odtwarzacz dobiera klatkę po czasie z zegara i chce
+# widzieć to, co czujnik zmierzył — razem z nierównym odstępem między
+# pomiarami. Rozmiaru odpowiedzi i tak pilnuje motion3d.MAX_FRAMES.
+NO_FPS_LIMIT = 0.0
 MIN_FPS = 5.0
-MAX_FPS = 120.0
+MAX_FPS = 1000.0
 
 
 def _user_dir(user):
@@ -354,17 +361,61 @@ def _motion3d_cached(path_str, mtime, size, params):
     return motion3d.build_motion(prep, **dict(params))
 
 
+def _phase_tuples(segment):
+    """Fazy segmentu w formacie, którego oczekuje motion3d._phase_spans:
+    (klucz, etykieta, kolor, start, koniec).
+
+    Krotka, a nie lista, bo trafia do klucza cache w _motion3d_cached —
+    poprawienie zakresu fazy ma unieważnić policzoną wcześniej animację.
+    """
+    rank = {key: i for i, key in enumerate(SubSegment.PHASE_ORDER)}
+    subs = sorted(
+        segment.subsegments.all(),
+        key=lambda sub: rank.get(sub.phase, len(rank)),
+    )
+    return tuple(
+        (
+            sub.phase,
+            sub.get_phase_display(),
+            SubSegment.PHASE_COLORS.get(sub.phase),
+            sub.start,
+            sub.end,
+        )
+        for sub in subs
+    )
+
+
 @login_required
 def api_dataset_motion3d(request, filename):
-    """Scena Plotly + klatki animacji dla zakresu wierszy [x0, x1).
+    """Scena Plotly + klatki animacji dla JEDNEGO segmentu.
+
+    Zakres bierze się WYŁĄCZNIE z segmentu w bazie (?segment=<id>), nigdy
+    z widocznego fragmentu wykresu. Pozycja powstaje z dwukrotnego
+    całkowania przyspieszenia i trzyma się tylko na odcinku długości
+    uderzenia — puszczona na dowolnym zakresie, który akurat widać na
+    ekranie, pokazuje ruch, którego nie było. Segment jest więc częścią
+    kontraktu, a nie wygodą: bez niego nie ma czego liczyć.
 
     Czyta surowy CSV przez motion3d.prepare(), a NIE przez _load_series —
     tam wartości są znormalizowane do 0–1 i jednostki fizyczne już nie
     istnieją, więc nie dałoby się z nich całkować przyspieszenia.
     """
-    dataset = _resolve_dataset(request.user, filename)
-    if dataset is None:
-        return JsonResponse({"error": "Nie znaleziono pliku."}, status=404)
+    raw_id = request.GET.get("segment")
+    if not raw_id:
+        return JsonResponse(
+            {"error": "Zaznacz uderzenie na wykresie 2D — animacja liczy się "
+                      "dla pojedynczego segmentu."},
+            status=400,
+        )
+
+    try:
+        segment_id = int(raw_id)
+    except (TypeError, ValueError):
+        return JsonResponse({"error": "Nieprawidłowy numer segmentu."}, status=400)
+
+    dataset, segment, error = _segment_or_error(request.user, filename, segment_id)
+    if error:
+        return error
 
     path = _user_dir(request.user) / dataset.filename
     if not path.exists():
@@ -376,19 +427,27 @@ def api_dataset_motion3d(request, filename):
             return default
         return cast(raw)
 
+    def flag(name, default):
+        raw = request.GET.get(name)
+        if raw is None or raw == "":
+            return default
+        return raw not in ("0", "false", "no")
+
     def clamp(value, lo, hi):
         return max(lo, min(value, hi))
 
+    # Nazwy kluczy muszą się zgadzać z sygnaturą motion3d.build_motion —
+    # lecą do niej jako **params.
     try:
         params = (
-            ("lo", num("x0", 0, int)),
-            ("hi", num("x1", 0, int)),
-            ("hit_lo", num("hit0", None, int)),
-            ("hit_hi", num("hit1", None, int)),
-            ("fps", clamp(num("fps", DEFAULT_FPS), MIN_FPS, MAX_FPS)),
-            ("tau", clamp(num("tau", 0.7), 0.02, 10.0)),
-            ("hp_hz", clamp(num("hp", 0.4), 0.0, 20.0)),
-            ("lock_axis", request.GET.get("lock") in ("1", "true")),
+            ("lo", segment.start),
+            ("hi", segment.end),
+            ("phases", _phase_tuples(segment)),
+            ("fps", clamp(num("fps", MIN_FPS), MIN_FPS, MAX_FPS)
+            if request.GET.get("fps") else NO_FPS_LIMIT),
+            ("hp_hz", clamp(num("hp", 0.35), 0.0, 20.0)),
+            ("zupt", flag("zupt", True)),
+            ("smooth", flag("smooth", True)),
             ("watch_scale", clamp(num("watch", 1.0), 0.2, 20.0)),
             ("pos_scale", clamp(num("posScale", 1.0), 0.1, 50.0)),
         )
@@ -505,9 +564,11 @@ def _segments_response(dataset, status=200):
     return JsonResponse({
         "segments": _segments_payload(dataset),
         # Lista faz idzie razem z danymi, żeby przeglądarka nie musiała
-        # trzymać własnej kopii nazw — modele są tu jedynym źródłem prawdy.
+        # trzymać własnej kopii nazw ani kolorów — modele są tu jedynym
+        # źródłem prawdy, wspólnym z animacją 3D.
         "phase_types": [
-            {"key": key, "label": label} for key, label in SubSegment.PHASE_CHOICES
+            {"key": key, "label": label, "color": SubSegment.PHASE_COLORS.get(key)}
+            for key, label in SubSegment.PHASE_CHOICES
         ],
     }, status=status)
 

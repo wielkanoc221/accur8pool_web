@@ -40,15 +40,25 @@ document.addEventListener('DOMContentLoaded', function () {
     // źródłem prawdy). Tutaj zostaje tylko warstwa wizualna.
     const SEGMENT_COLOR = '#3b82f6';
 
-    const PHASE_STYLE = {
-        przygotowanie: { color: '#f59e0b', short: 'PRZYG' },
-        przymierzanie: { color: '#8b5cf6', short: 'PRZYM' },
-        uderzenie:     { color: '#ef4444', short: 'UDER' },
-        po_uderzeniu:  { color: '#10b981', short: 'PO UD' }
+    // Skróty na prostokątach zostają tutaj — to czysta warstwa wizualna
+    // wykresu 2D. KOLOR przychodzi z serwera (phase_types), bo tę samą
+    // fazę maluje też animacja 3D, a scenę 3D buduje serwer. Dwie kopie
+    // palety znaczyłyby, że ta sama faza ma inny kolor w każdej zakładce.
+    const PHASE_SHORT = {
+        przygotowanie: 'PRZYG',
+        przymierzanie: 'PRZYM',
+        uderzenie:     'UDER',
+        po_uderzeniu:  'PO UD'
     };
-    const PHASE_FALLBACK = { color: '#64748b', short: '···' };
+    const FALLBACK_COLOR = '#64748b';
 
-    const styleFor = key => PHASE_STYLE[key] || PHASE_FALLBACK;
+    function styleFor(key) {
+        const type = phaseTypes.find(t => t.key === key);
+        return {
+            color: (type && type.color) || FALLBACK_COLOR,
+            short: PHASE_SHORT[key] || '···'
+        };
+    }
 
     // ---------- stan ----------
     const chart = window.a8Chart || null;
@@ -59,6 +69,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let activeId = null;    // podświetlony na wykresie (jego fazy też widać)
     let detailId = null;    // otwarty w panelu widok faz
     let armed = null;       // czekamy na przeciągnięcie: patrz arm()
+    let loaded = false;     // pierwsza odpowiedź serwera już przyszła
 
     const baseUrl = '/api/datasets/' + encodeURIComponent(datasetId) + '/segments/';
 
@@ -105,8 +116,8 @@ document.addEventListener('DOMContentLoaded', function () {
         if (activeId !== null && !byId(activeId)) activeId = null;
         if (detailId !== null && !byId(detailId)) detailId = null;
 
-        render();
-        drawShapes();
+        loaded = true;
+        syncViews();
     }
 
     const byId = id => segments.find(s => s.id === id) || null;
@@ -180,8 +191,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     (best, s) => (!best || s.id > best.id) ? s : best, null
                 );
                 if (created) activeId = created.id;
-                render();
-                drawShapes();
+                syncViews();
                 arm({ kind: 'segment' });
             }
 
@@ -459,8 +469,7 @@ document.addEventListener('DOMContentLoaded', function () {
         activeId = seg.id;
         detailId = seg.id;
         if (chart) chart.zoomTo(seg.start, seg.end);
-        render();
-        drawShapes();
+        syncViews();
     }
 
     async function mutate(method, url, body) {
@@ -492,8 +501,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (action && action.dataset.action === 'zoom') {
             activeId = seg.id;
             if (chart) chart.zoomTo(seg.start, seg.end);
-            render();
-            drawShapes();
+            syncViews();
             return;
         }
 
@@ -571,9 +579,62 @@ document.addEventListener('DOMContentLoaded', function () {
     els.back.addEventListener('click', function () {
         disarm();
         detailId = null;      // activeId zostaje — fazy nadal widać na wykresie
+        syncViews();
+    });
+
+    // ============================================================
+    //  API DLA motion3d.js
+    //
+    //  Zakładka „Ruch 3D” animuje POJEDYNCZY segment, więc jej lista
+    //  wyboru to dokładnie ta sama lista, którą trzyma ten panel. Zamiast
+    //  drugiego żądania o te same dane wystawiamy stan tutaj.
+    //
+    //  Skrypty ładowane PO segments.js widzą ten obiekt gotowy, bo ich
+    //  nasłuch DOMContentLoaded rejestruje się później niż nasz. Dlatego
+    //  przypisanie stoi PRZED sprawdzeniem datasetId niżej — inaczej przy
+    //  wejściu bez wybranego pliku obiekt nigdy by nie powstał.
+    // ============================================================
+
+    const changeListeners = [];
+
+    function snapshot() {
+        return { segments: segments, phaseTypes: phaseTypes, activeId: activeId };
+    }
+
+    /** Jedyne miejsce, w którym odświeżają się widoki stanu segmentów.
+     *
+     *  Panel, prostokąty na wykresie i lista w zakładce 3D pokazują tę
+     *  samą listę, więc muszą się zmieniać razem. Wołanie ich osobno
+     *  w każdym miejscu, które rusza `segments` albo `activeId`, kończyło
+     *  się tym, że jeden z widoków zostawał w tyle. */
+    function syncViews() {
         render();
         drawShapes();
-    });
+
+        const stan = snapshot();
+        changeListeners.forEach(function (cb) {
+            // Błąd jednego odbiorcy nie może zatrzymać pozostałych ani
+            // przerwać operacji, która akurat zmieniła stan.
+            try { cb(stan); } catch (err) { console.error('a8Segments:', err); }
+        });
+    }
+
+    window.a8Segments = {
+        /** Segment po id albo null. */
+        byId: byId,
+
+        all: () => segments,
+        getActiveId: () => activeId,
+
+        /** Powiadomienie o każdej zmianie listy segmentów albo
+         *  podświetlenia. Wywoływane od razu, jeśli dane są już
+         *  wczytane — odbiorca nie musi wiedzieć, czy zdążył się
+         *  zarejestrować przed pierwszą odpowiedzią serwera. */
+        onChange(cb) {
+            changeListeners.push(cb);
+            if (loaded) cb(snapshot());
+        }
+    };
 
     // ============================================================
     //  START
