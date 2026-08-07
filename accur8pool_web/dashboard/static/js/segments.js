@@ -358,7 +358,6 @@ document.addEventListener('DOMContentLoaded', function () {
                 <div class="seg-color" style="background:${SEGMENT_COLOR}"></div>
                 <div class="seg-info">
                     <div class="seg-name">Segment ${escapeHtml(seg.name)}</div>
-                    <div class="seg-range">${fmt(seg.start)} – ${fmt(seg.end)} · ${fmt(seg.length)} próbek</div>
                     <div class="phase-dots">
                         ${phaseDots(seg)}
                         <span class="phase-dots-label">${seg.phases.length}/${phaseTypes.length} faz</span>

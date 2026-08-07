@@ -43,13 +43,11 @@ document.addEventListener('DOMContentLoaded', function () {
         speed: document.getElementById('m3d-speed'),
         seek: document.getElementById('m3d-seek'),
         clock: document.getElementById('m3d-clock'),
-        perf: document.getElementById('m3d-perf'),
         phase: document.getElementById('m3d-phase'),
 
         statTime: document.getElementById('m3d-stat-time'),
         statPath: document.getElementById('m3d-stat-path'),
-        statVmax: document.getElementById('m3d-stat-vmax'),
-        statFrames: document.getElementById('m3d-stat-frames')
+        statVmax: document.getElementById('m3d-stat-vmax')
     };
 
     // ============================================================
@@ -144,9 +142,6 @@ document.addEventListener('DOMContentLoaded', function () {
     let lastFrame = -1;      // ostatnia NARYSOWANA klatka
     let lastPhase = null;    // numer podświetlonej fazy (null = nic nie rysowano)
     let raf = null;
-
-    let drawCount = 0;
-    let perfSince = 0;
 
     const cache = new Map();
 
@@ -329,12 +324,6 @@ document.addEventListener('DOMContentLoaded', function () {
         if (els.statTime) els.statTime.textContent = meta.duration.toFixed(2) + ' s';
         if (els.statPath) els.statPath.textContent = meta.path_cm.toFixed(1) + ' cm';
         if (els.statVmax) els.statVmax.textContent = meta.v_max.toFixed(2) + ' m/s';
-        if (els.statFrames) {
-            // Klatka = próbka, więc podajemy częstotliwość zapisu, a nie
-            // wymyśloną liczbę klatek na sekundę.
-            els.statFrames.textContent =
-                meta.frames + ' × ' + meta.sample_rate.toFixed(0) + ' Hz';
-        }
     }
 
     /** Rysuje klatkę o podanym numerze. Cała praca na klatkę jest tutaj. */
@@ -393,7 +382,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
         highlightPhase(p.phase[nr]);
 
-        drawCount++;
         updateReadout(nr);
     }
 
@@ -505,13 +493,6 @@ document.addEventListener('DOMContentLoaded', function () {
 
         seekTo(czas);
 
-        if (els.perf && now - perfSince > 500) {
-            const fps = drawCount * 1000 / (now - perfSince);
-            els.perf.textContent = fps.toFixed(0) + ' kl/s';
-            drawCount = 0;
-            perfSince = now;
-        }
-
         raf = requestAnimationFrame(tick);
     }
 
@@ -525,8 +506,6 @@ document.addEventListener('DOMContentLoaded', function () {
         playing = true;
         timeAtStart = currentTime;
         clockStart = performance.now();
-        perfSince = clockStart;
-        drawCount = 0;
 
         syncPlayButton();
         raf = requestAnimationFrame(tick);
@@ -536,7 +515,6 @@ document.addEventListener('DOMContentLoaded', function () {
         if (raf !== null) cancelAnimationFrame(raf);
         raf = null;
         playing = false;
-        if (els.perf) els.perf.textContent = '';
         syncPlayButton();
     }
 

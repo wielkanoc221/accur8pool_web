@@ -420,13 +420,6 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
 }
-.seg-range {
-    font-size: 11px;
-    color: var(--text-secondary);
-    font-variant-numeric: tabular-nums;
-    margin-top: 2px;
-}
-
 .seg-actions {
     display: flex;
     gap: 4px;
