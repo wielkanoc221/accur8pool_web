@@ -99,7 +99,7 @@ def _prepare_uploaded_file(user, raw_path, filename):
     kolumn, więc wystarczy to odnotować w logu i w odpowiedzi.
     """
     try:
-        from utils.data_processing.prepare_raw_data import prepare_raw_file_and_save
+        from accur8pool_web.utils.data_processing.prepare_raw_data import prepare_raw_file_and_save
 
         return prepare_raw_file_and_save(raw_path, _user_prepared_dir(user), filename)
     except Exception:
