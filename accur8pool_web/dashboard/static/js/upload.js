@@ -37,5 +37,8 @@ async function uploadDatasetFile(file) {
         throw new Error(payload.error || `Błąd serwera (${response.status})`);
     }
 
-    return payload; // { id, name, records, updated_at, url }
+    // `prepared` mówi, czy obok surowego pliku powstała wersja
+    // przygotowana (transform_raw_df). false nie jest błędem uploadu —
+    // plik jest na serwerze, brakuje tylko kolumn pochodnych.
+    return payload; // { id, name, records, updated_at, url, prepared }
 }

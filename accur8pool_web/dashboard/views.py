@@ -22,8 +22,17 @@ from .models import Dataset, Segment, SubSegment
 
 logger = logging.getLogger(__name__)
 
+# Surowe pliki tak, jak przyszły z uploadu.
 DATA_DIR = Path(
     getattr(settings, "ACCUR8POOL_DATA_DIR", Path(settings.BASE_DIR) / "new_data" / "raw_data")
+)
+
+# Te same pliki po transform_raw_df — pod tą samą nazwą i tym samym
+# <user_id>, tyle że w drugim drzewie. Wykresy i animacja czytają nadal
+# z DATA_DIR; prepared_data jest wejściem dla dalszego przetwarzania.
+PREPARED_DATA_DIR = Path(
+    getattr(settings, "ACCUR8POOL_PREPARED_DATA_DIR",
+            Path(settings.BASE_DIR) / "new_data" / "prepared_data")
 )
 
 TARGET_BUCKETS = 2500
@@ -51,6 +60,51 @@ MAX_FPS = 1000.0
 
 def _user_dir(user):
     return DATA_DIR / str(user.pk)
+
+
+def _user_prepared_dir(user):
+    return PREPARED_DATA_DIR / str(user.pk)
+
+
+def _dataset_path(user, dataset):
+    """Plik, z którego czyta dashboard: przygotowany, a w zapasie surowy.
+
+    Pierwszeństwo ma prepared_data — tam sygnały są po filtrze
+    dolnoprzepustowym i doszły kolumny pochodne (magnitudy, jerk,
+    roll/pitch), więc wykres i animacja pokazują to samo, na czym pracuje
+    dalsze przetwarzanie.
+
+    Surowy plik zostaje jako zapas dla zestawów wgranych, zanim
+    prepared_data w ogóle istniało, oraz dla tych, których nie dało się
+    przetworzyć (np. zapis bez magnetometru). Dzięki temu brak wersji
+    przygotowanej degraduje widok do poprzedniego zachowania, zamiast
+    zamieniać go w błąd 404.
+    """
+    prepared_path = _user_prepared_dir(user) / dataset.filename
+    if prepared_path.exists():
+        return prepared_path
+    return _user_dir(user) / dataset.filename
+
+
+def _prepare_uploaded_file(user, raw_path, filename):
+    """Liczy wersję przygotowaną świeżo wgranego pliku.
+
+    Import jest w środku funkcji celowo: transform_raw_df ciągnie za sobą
+    scipy, a to zależność potrzebna wyłącznie tutaj — bez niej reszta
+    dashboardu (wykresy, animacja 3D) ma działać normalnie.
+
+    Zwraca ścieżkę zapisanego pliku albo None, gdy przygotowanie się nie
+    udało. Nieudana transformacja NIE unieważnia uploadu — surowy plik
+    jest już na dysku i da się go oglądać; brakuje tylko pochodnych
+    kolumn, więc wystarczy to odnotować w logu i w odpowiedzi.
+    """
+    try:
+        from utils.data_processing.prepare_raw_data import prepare_raw_file_and_save
+
+        return prepare_raw_file_and_save(raw_path, _user_prepared_dir(user), filename)
+    except Exception:
+        logger.exception("Nie udało się przygotować pliku: %s", raw_path)
+        return None
 
 
 def _resolve_dataset(user, filename):
@@ -249,7 +303,7 @@ def dashboard(request, filename=None):
             error=(f"Nie znaleziono pliku: {filename}" if filename else None),
         )
 
-    data_path = _user_dir(request.user) / dataset.filename
+    data_path = _dataset_path(request.user, dataset)
 
     if not data_path.exists():
         logger.warning("Brak pliku na dysku: %s (dataset id=%s)", data_path, dataset.pk)
@@ -296,7 +350,7 @@ def api_dataset_range(request, filename):
     if dataset is None:
         return JsonResponse({"error": "Nie znaleziono pliku."}, status=404)
 
-    path = _user_dir(request.user) / dataset.filename
+    path = _dataset_path(request.user, dataset)
     if not path.exists():
         return JsonResponse({"error": "Plik nie istnieje na serwerze."}, status=404)
 
@@ -396,9 +450,13 @@ def api_dataset_motion3d(request, filename):
     ekranie, pokazuje ruch, którego nie było. Segment jest więc częścią
     kontraktu, a nie wygodą: bez niego nie ma czego liczyć.
 
-    Czyta surowy CSV przez motion3d.prepare(), a NIE przez _load_series —
-    tam wartości są znormalizowane do 0–1 i jednostki fizyczne już nie
+    Czyta CSV przez motion3d.prepare(), a NIE przez _load_series — tam
+    wartości są znormalizowane do 0–1 i jednostki fizyczne już nie
     istnieją, więc nie dałoby się z nich całkować przyspieszenia.
+
+    Plik przygotowany nadaje się do tego tak samo jak surowy: jednostki
+    zostają fizyczne, a oś czasu (`time` w sekundach) motion3d rozpoznaje
+    sam — _axis_from_column wykrywa jednostkę zamiast ją zakładać.
     """
     raw_id = request.GET.get("segment")
     if not raw_id:
@@ -417,7 +475,7 @@ def api_dataset_motion3d(request, filename):
     if error:
         return error
 
-    path = _user_dir(request.user) / dataset.filename
+    path = _dataset_path(request.user, dataset)
     if not path.exists():
         return JsonResponse({"error": "Plik nie istnieje na serwerze."}, status=404)
 
@@ -717,9 +775,8 @@ def datasets_view(request):
 
 @login_required
 def api_datasets(request):
-    user_dir = _user_dir(request.user)
     data = [
-        _dataset_meta(ds, path=user_dir / ds.filename)
+        _dataset_meta(ds, path=_dataset_path(request.user, ds))
         for ds in Dataset.objects.filter(owner=request.user)
     ]
     return JsonResponse(data, safe=False)
@@ -770,4 +827,11 @@ def upload_dataset(request):
         return JsonResponse({"error": "Nie udało się zapisać pliku na serwerze."}, status=500)
 
     dataset = Dataset.objects.create(owner=request.user, filename=filename)
-    return JsonResponse(_dataset_meta(dataset, path=dest_path))
+
+    # Wersja przygotowana powstaje od razu przy uploadzie, żeby dalsze
+    # przetwarzanie nie musiało liczyć jej za każdym razem od nowa.
+    prepared_path = _prepare_uploaded_file(request.user, dest_path, filename)
+
+    meta = _dataset_meta(dataset, path=dest_path)
+    meta["prepared"] = prepared_path is not None
+    return JsonResponse(meta)

@@ -79,12 +79,36 @@ def get_csv_paths(input_dir):
 
 def read_csv(path):
     try:
-        df = pd.read_csv(path, engine="pyarrow")
+        try:
+            df = pd.read_csv(path, engine="pyarrow")
+        except ImportError:
+            # pyarrow jest tylko przyspieszaczem — bez niego czytamy
+            # domyślnym silnikiem pandas zamiast wywracać cały import.
+            df = pd.read_csv(path)
 
     except Exception as e:
         raise FileReadException(e)
 
     return df
+
+
+def prepare_raw_file_and_save(input_path: Path, output_dir: Path, filename: str = None) -> Path:
+    """Przygotowuje JEDEN surowy plik i zapisuje go w output_dir.
+
+    Wydzielone z pętli `prepare_raw_data_and_save`, bo tej samej ścieżki
+    (odczyt → transformacja → zapis) używa upload w aplikacji webowej,
+    gdzie plik przychodzi pojedynczo. Wyjątki lecą dalej — o tym, czy
+    błąd tylko logujemy, czy przerywa całość, decyduje wołający.
+    """
+    input_path = Path(input_path)
+    output_dir = Path(output_dir)
+    filename = filename or input_path.name
+
+    df = read_csv(input_path)
+    df['session_index'] = input_path.stem
+    transformed = transform_raw_df(df)
+    save_data(transformed, output_dir, filename)
+    return output_dir / filename
 
 
 def prepare_raw_data_and_save(input_paths: list[Path], output_dir: Path):
@@ -93,10 +117,7 @@ def prepare_raw_data_and_save(input_paths: list[Path], output_dir: Path):
     for index, path in enumerate(input_paths, start=1):
         try:
             print(index, '/', len(input_paths))
-            df = read_csv(path)
-            df['session_index'] = path.stem
-            transformed = transform_raw_df(df)
-            save_data(transformed, output_dir, path.name)
+            prepare_raw_file_and_save(path, output_dir)
 
         except FileReadException as e:
             print(f'ERROR blad odczytu pliku {path} {e} ')

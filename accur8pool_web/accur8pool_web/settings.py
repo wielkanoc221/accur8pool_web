@@ -39,7 +39,15 @@ CSRF_TRUSTED_ORIGINS = [
 ]
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+# Dane użytkowników leżą w dwóch równoległych drzewach o tej samej
+# strukturze (<dir>/<user_id>/<filename>.csv):
+#   raw_data      — plik dokładnie taki, jaki przyszedł z uploadu,
+#   prepared_data — ten sam plik po transform_raw_df (filtry, magnitudy,
+#                   jerk, roll/pitch), liczony w trakcie uploadu.
+# Ta sama nazwa pliku w obu katalogach wiąże wersję surową z przygotowaną,
+# więc nie trzeba trzymać drugiej ścieżki w bazie.
 ACCUR8POOL_DATA_DIR = BASE_DIR / "new_data" / "raw_data"
+ACCUR8POOL_PREPARED_DATA_DIR = BASE_DIR / "new_data" / "prepared_data"
 AUTH_PASSWORD_VALIDATORS = []
 LOGIN_URL = '/login'
 LOGIN_REDIRECT_URL = '/dashboard'

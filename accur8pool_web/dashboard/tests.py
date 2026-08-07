@@ -4,7 +4,9 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
+import pandas as pd
 from django.contrib.auth import get_user_model
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
@@ -43,8 +45,12 @@ def _world_to_device(v, ang):
                             s * v[:, 0] + c * v[:, 2]])
 
 
-def imu_csv(seconds=8.0, with_lin=True, with_rot=True):
-    """Ramka w formacie zapisu z zegarka: acc/gyr/rot/linacc + timestamp."""
+def imu_csv(seconds=8.0, with_lin=True, with_rot=True, with_mag=False):
+    """Ramka w formacie zapisu z zegarka: acc/gyr/rot/linacc + timestamp.
+
+    `with_mag` domyślnie wyłączone, bo magnetometru nie potrzebuje ani
+    rekonstrukcja 3D, ani wykres — dokłada go tylko test przygotowania
+    danych, gdzie transform_raw_df wymaga kompletu kolumn."""
     n = int(FS_IMU * seconds)
     t = np.arange(n) / FS_IMU
 
@@ -76,6 +82,10 @@ def imu_csv(seconds=8.0, with_lin=True, with_rot=True):
             "roty": np.sin(ang[pod] / 2),
             "rotz": np.zeros(n),
         })
+    if with_mag:
+        # Pole ziemskie (~50 µT na północ) obracane razem z urządzeniem.
+        mag = _world_to_device(np.tile([22.0, 0.0, 44.0], (n, 1)), ang)
+        kolumny.update({"magx": mag[:, 0], "magy": mag[:, 1], "magz": mag[:, 2]})
 
     naglowek = ",".join(kolumny)
     wiersze = np.column_stack(list(kolumny.values()))
@@ -83,20 +93,28 @@ def imu_csv(seconds=8.0, with_lin=True, with_rot=True):
 
 
 class BaseDataTest(TestCase):
-    """Zalogowany użytkownik i katalog na pliki CSV poza drzewem projektu.
+    """Zalogowany użytkownik i katalogi na pliki CSV poza drzewem projektu.
 
-    views.DATA_DIR jest liczone przy imporcie modułu, więc override_settings
-    już na nie nie wpływa — trzeba podmienić samą zmienną.
+    views.DATA_DIR i views.PREPARED_DATA_DIR są liczone przy imporcie
+    modułu, więc override_settings już na nie nie wpływa — trzeba podmienić
+    same zmienne.
     """
 
     def setUp(self):
         super().setUp()
-        self.tmp_dir = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, self.tmp_dir, True)
+        self.tmp_root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp_root, True)
 
-        patch = mock.patch.object(views, "DATA_DIR", self.tmp_dir)
-        patch.start()
-        self.addCleanup(patch.stop)
+        self.tmp_dir = self.tmp_root / "raw_data"
+        self.prepared_dir = self.tmp_root / "prepared_data"
+        # prepared_data celowo NIE powstaje z góry — ma je zakładać upload.
+        self.tmp_dir.mkdir(parents=True, exist_ok=True)
+
+        for nazwa, katalog in (("DATA_DIR", self.tmp_dir),
+                               ("PREPARED_DATA_DIR", self.prepared_dir)):
+            patch = mock.patch.object(views, nazwa, katalog)
+            patch.start()
+            self.addCleanup(patch.stop)
 
         self.user = User.objects.create_user("ala", password="tajne-haslo-123")
         self.client.force_login(self.user)
@@ -350,3 +368,122 @@ class SegmentApiTests(BaseDataTest):
         self.assertEqual(segmenty[0]["name"], "1")
         self.assertEqual((segmenty[0]["start"], segmenty[0]["end"]), (1200, 2400))
         self.assertEqual(segmenty[0]["phases"], [])
+
+
+# ============================================================
+#  UPLOAD: raw_data + prepared_data
+# ============================================================
+
+class UploadTests(BaseDataTest):
+    """Upload zapisuje plik w DWÓCH drzewach: surowy i przygotowany."""
+
+    def wyslij(self, nazwa, tresc):
+        plik = SimpleUploadedFile(nazwa, tresc.encode("utf-8"), content_type="text/csv")
+        return self.client.post(reverse("api_upload_dataset"), {"file": plik})
+
+    def sciezki(self, nazwa):
+        return (self.tmp_dir / str(self.user.pk) / nazwa,
+                self.prepared_dir / str(self.user.pk) / nazwa)
+
+    def test_upload_tworzy_surowy_i_przygotowany_plik(self):
+        response = self.wyslij("ruch.csv", imu_csv(seconds=4.0, with_mag=True))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json()["prepared"])
+
+        raw_path, prepared_path = self.sciezki("ruch.csv")
+        self.assertTrue(raw_path.exists())
+        self.assertTrue(prepared_path.exists())
+
+        # Surowy plik zostaje bajt w bajt taki, jaki przyszedł…
+        raw = pd.read_csv(raw_path)
+        self.assertNotIn("acc_magnitude", raw.columns)
+
+        # …a przygotowany ma kolumny dokładane przez transform_raw_df.
+        prepared = pd.read_csv(prepared_path)
+        for kolumna in ("acc_magnitude", "gyr_magnitude", "time",
+                        "jerk_accx", "roll", "pitch", "session_index"):
+            self.assertIn(kolumna, prepared.columns)
+        self.assertEqual(len(prepared), len(raw))
+
+    def test_plik_bez_kompletu_kolumn_wciaz_sie_wgrywa(self):
+        # Transformacja wymaga m.in. magnetometru. Gdy go nie ma, upload ma
+        # się udać — brakuje tylko wersji przygotowanej.
+        with mock.patch.object(views.logger, "exception"):
+            response = self.wyslij("plaski.csv", "a,b\n" + "".join(f"{i},{i}\n"
+                                                                  for i in range(50)))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json()["prepared"])
+
+        raw_path, prepared_path = self.sciezki("plaski.csv")
+        self.assertTrue(raw_path.exists())
+        self.assertFalse(prepared_path.exists())
+
+    def test_kolejny_plik_o_tej_samej_nazwie_nie_nadpisuje_przygotowanego(self):
+        tresc = imu_csv(seconds=4.0, with_mag=True)
+        self.wyslij("ruch.csv", tresc)
+        response = self.wyslij("ruch.csv", tresc)
+
+        nazwa = response.json()["name"]
+        self.assertEqual(nazwa, "ruch (2).csv")
+
+        raw_path, prepared_path = self.sciezki(nazwa)
+        self.assertTrue(raw_path.exists())
+        self.assertTrue(prepared_path.exists())
+
+
+class PreparedDataReadTests(BaseDataTest):
+    """Wykres i animacja 3D czytają wersję przygotowaną, gdy ta istnieje."""
+
+    def setUp(self):
+        super().setUp()
+        plik = SimpleUploadedFile("ruch.csv",
+                                  imu_csv(seconds=4.0, with_mag=True).encode("utf-8"),
+                                  content_type="text/csv")
+        odpowiedz = self.client.post(reverse("api_upload_dataset"), {"file": plik})
+        self.assertTrue(odpowiedz.json()["prepared"])
+
+        self.dataset = Dataset.objects.get(owner=self.user, filename="ruch.csv")
+        self.raw_path = self.tmp_dir / str(self.user.pk) / "ruch.csv"
+        self.prepared_path = self.prepared_dir / str(self.user.pk) / "ruch.csv"
+
+    def kolumny_liczbowe(self, path):
+        return len(pd.read_csv(path).select_dtypes(include=["number"]).columns)
+
+    def test_wykres_bierze_kolumny_z_wersji_przygotowanej(self):
+        # Wersja przygotowana ma kolumny pochodne, więc jest ich WIĘCEJ niż
+        # w surowej — po tej liczbie widać, który plik trafił na wykres.
+        self.assertGreater(self.kolumny_liczbowe(self.prepared_path),
+                           self.kolumny_liczbowe(self.raw_path))
+
+        response = self.client.get(reverse("dashboard", args=["ruch.csv"]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["columns_count"],
+                         self.kolumny_liczbowe(self.prepared_path))
+
+    def test_bez_wersji_przygotowanej_wraca_surowy_plik(self):
+        # Zestawy wgrane, zanim prepared_data istniało, mają nadal działać.
+        self.prepared_path.unlink()
+
+        response = self.client.get(reverse("dashboard", args=["ruch.csv"]))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["columns_count"],
+                         self.kolumny_liczbowe(self.raw_path))
+
+    def test_animacja_3d_liczy_sie_z_wersji_przygotowanej(self):
+        segment = Segment.objects.create(dataset=self.dataset, start=200, end=1000)
+        url = (reverse("api_dataset_motion3d", args=["ruch.csv"])
+               + f"?segment={segment.pk}")
+
+        body = self.client.get(url).json()
+        self.assertEqual(body["meta"]["source"], "fused")
+        # Oś czasu bierze się z kolumny `time` dołożonej przez transform —
+        # rozpoznanej, a nie założonej (patrz motion3d._axis_from_column).
+        self.assertTrue(body["meta"]["time_source"].startswith("time"))
+
+    def test_zakres_w_pelnej_rozdzielczosci_tez_z_przygotowanej(self):
+        response = self.client.get(
+            reverse("api_dataset_range", args=["ruch.csv"]) + "?x0=0&x1=500")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.json()["series"]),
+                         self.kolumny_liczbowe(self.prepared_path))
