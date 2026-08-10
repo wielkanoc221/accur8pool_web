@@ -79,10 +79,14 @@ MAX_ROWS = 200_000
 # Minimum, żeby cokolwiek dało się scałkować i przefiltrować.
 MIN_ROWS = 8
 
-# Sufit klatek na jedną odpowiedź. 3000 próbek to pół minuty zapisu
-# przy 100 Hz — powyżej JSON zaczyna ważyć więcej, niż sama animacja
-# jest warta. Powyżej tego progu wchodzi decymacja (co k-ta próbka).
-MAX_FRAMES = 3000
+# Sufit klatek na jedną odpowiedź. Powyżej tego progu wchodzi decymacja
+# (co k-ta próbka), czyli JEDYNE miejsce, w którym z animacji wypadają
+# całe pomiary. Dlatego próg jest wysoki: 6000 klatek to minuta zapisu
+# przy 100 Hz i piętnaście sekund przy 400 Hz, a więc znacznie więcej,
+# niż trwa jakiekolwiek pojedyncze uderzenie. Segment normalnej długości
+# nie dociera tu nigdy i idzie co do próbki. Faktyczny krok wraca
+# w `meta.stride` i interfejs go pokazuje.
+MAX_FRAMES = 6000
 
 # Górny limit klatek na sekundę, gdy wołający nic nie poda. Wyżej niż
 # jakikolwiek realny zapis z zegarka, więc domyślnie NIC nie jest
@@ -101,14 +105,86 @@ GAP_DT = 0.25
 
 FALLBACK_FS = 100.0
 
-# Próg „stoi w miejscu” dla ZUPT: przyspieszenie po odjęciu grawitacji
-# i prędkość kątowa poniżej tych wartości przez co najmniej MIN_STILL
-# próbek pod rząd.
-STILL_ACC = 0.45      # m/s²
-STILL_GYR = 0.35      # rad/s
-MIN_STILL = 5
+# ---------- wykrywanie bezruchu dla ZUPT ----------
+#
+# ZUPT jest JEDYNYM miejscem w całej ścieżce, w którym z prędkości znika
+# ruch, którego czujnik nie odróżnił od dryfu. Wszystko poniżej to jest
+# odpowiedź na jedno pytanie: co konkretnie wolno uznać za bezruch.
+#
+# 1. AKTYWNOŚĆ, NIE WARTOŚĆ CHWILOWA. Poprzednia wersja pytała o samo
+#    |a| w danej próbce, a to jest test, który W ŚRODKU KAŻDEGO GŁADKIEGO
+#    RUCHU daje odpowiedź „stoi”: przyspieszenie przechodzi tam przez
+#    zero — dokładnie wtedy, gdy prędkość jest NAJWIĘKSZA. Przy powolnym
+#    przesunięciu przejście przez zero trwa kilkadziesiąt milisekund,
+#    czyli dłużej niż wymagana seria, więc ZUPT wbijał zero prędkości
+#    w szczyt ruchu i kasował z niego wszystko. Teraz liczy się wartość
+#    SKUTECZNA w oknie STILL_WIN_S: w prawdziwym bezruchu jest mała,
+#    a przy przejściu przez zero duża, bo tuż obok są oba szczyty.
+#
+# 2. PRÓG Z DANYCH, NIE Z TABLICY. Stała liczba musi być kompromisem
+#    między czułym a zaszumionym czujnikiem i w obie strony jest zła:
+#    za wysoka kasuje spokojne przymierzanie, za niska nie znajduje ani
+#    jednego postoju. Bierzemy więc niski kwantyl aktywności w tym
+#    właśnie zakresie i mnożymy przez zapas — próg sam schodzi na
+#    zapisie cichym i sam rośnie na hałaśliwym.
+STILL_QUANTILE = 0.10
+STILL_MARGIN = 1.6
+
+# Twarde widełki na próg wyliczony z danych. Sufity to dawne, hojne
+# stałe — wyżej nie wchodzimy nigdy.
+#
+# Podłogi są bardzo nisko i to jest celowe: mają ratować wyłącznie
+# przypadek zapisu idealnie gładkiego, w którym kwantyl wychodzi
+# dokładnie zerowy i żadna próbka nie przeszłaby testu. Prawdziwy
+# akcelerometr w zegarku szumi na poziomie setnych m/s², więc kwantyl
+# jest tam o rząd–dwa wyższy od podłogi i podłoga nie ma nic do rzeczy.
+# Gdyby postawić ją „na oko” wyżej, stałaby się ukrytym progiem
+# kasującym najdrobniejsze ruchy na czystych zapisach.
+STILL_ACC_MIN, STILL_ACC_MAX = 1e-3, 0.45     # m/s²
+STILL_GYR_MIN, STILL_GYR_MAX = 5e-4, 0.35     # rad/s
+
+# Gdy przy progu z danych nie ma ANI JEDNEGO postoju, próg rośnie
+# potęgami STILL_RELAX aż do sufitu. Bez postoju pozycja odpływa
+# liniowo i tor uderzenia robi się spiralą, więc warto spróbować —
+# ale faktycznie użyty próg wraca w `meta.still_threshold`.
+STILL_RELAX = 1.6
+STILL_STEPS = 8
+
+# Okno wartości skutecznej i minimalna długość serii — w SEKUNDACH,
+# nie w próbkach. Dawne „pięć próbek” znaczyło 50 ms przy 100 Hz, ale
+# już tylko 12 ms przy 400 Hz, czyli tyle, ile trwa jeden dołek szumu.
+STILL_WIN_S = 0.10
+MIN_STILL_S = 0.05
+MIN_STILL_SAMPLES = 3
+
+# Udział wierszy z NOWĄ wartością rotation vectora, powyżej którego
+# uznajemy, że czujnik nadaje w pełnym tempie i nie ma czego
+# interpolować. Patrz _smooth_held.
+HELD_RATIO = 0.5
+
+# Ile typowych okresów aktualizacji czujnika wolno przykryć jedną
+# interpolacją. Dłuższa przerwa między zmianami wartości to nie jest
+# przetrzymana próbka, tylko orientacja, która NAPRAWDĘ stała w miejscu.
+HELD_SPAN = 2.0
 
 NEUTRAL_COLOR = "#94a3b8"
+
+# Bryła zegarka i osie urządzenia, jako ułamki skali sceny.
+WATCH_FRACTION = 0.12
+AXIS_FRACTION = 1.7
+# Połowa przekątnej bryły z _watch_geometry: sqrt(0.45² + 0.60² + 0.16²).
+WATCH_RADIUS = 0.77
+
+# Podłoga boku sceny w centymetrach.
+#
+# Sześcian musi mieć JAKIŚ minimalny rozmiar, bo przy ręce stojącej
+# w miejscu inaczej rozciąga sam szum na cały ekran. Ale poprzednie
+# 6 cm było podłogą wyższą niż niejeden prawdziwy ruch nadgarstka:
+# delikatne zagranie mieściło się w kilku pikselach pośrodku pustej
+# sceny i nie było czego oglądać. 1 cm zostawia szum szumem, a ruch
+# rzędu milimetrów robi widocznym — realną skalę i tak podają podziałki
+# osi oraz `meta.span_cm`.
+MIN_SPAN_CM = 1.0
 
 # Ile klatek przerwy między sąsiednimi fazami traktujemy jako
 # niedokładność zaznaczenia, a nie jako celową dziurę. Przy 100 Hz trzy
@@ -172,8 +248,16 @@ def _cumtrapz(y, dt):
     return out
 
 
-def _runs_at_least(mask, min_len):
-    """Zostawia w masce tylko serie długości co najmniej min_len."""
+def _runs_at_least(mask, min_len, erode=0):
+    """Zostawia w masce tylko serie długości co najmniej min_len.
+
+    `erode` skraca każdą zachowaną serię o tyle próbek z obu stron.
+    Maska bezruchu powstaje z wielkości liczonej w oknie, więc jest
+    o pół okna ROZMYTA w obie strony i sięga w początek ruchu. Bez
+    skrócenia ZUPT wbijałby zero prędkości w pierwsze próbki ruszania
+    z miejsca — czyli dokładnie tam, gdzie zaczyna się to, co chcemy
+    zobaczyć.
+    """
     if not mask.any():
         return mask
     padded = np.concatenate([[False], mask, [False]])
@@ -183,7 +267,10 @@ def _runs_at_least(mask, min_len):
 
     out = np.zeros_like(mask)
     for s, e in zip(starts, ends):
-        if e - s >= min_len:
+        if e - s < min_len:
+            continue
+        s, e = s + erode, e - erode
+        if e > s:
             out[s:e] = True
     return out
 
@@ -266,10 +353,42 @@ def _smooth_held(q, t):
     zmiany = np.any(np.abs(np.diff(q, axis=0)) > 1e-9, axis=1)
     idx = np.concatenate([[0], np.nonzero(zmiany)[0] + 1])
 
-    # Mniej niż trzy punkty — nie ma czego interpolować. Więcej niż 80%
-    # wierszy — czujnik nadaje w pełnym tempie i każda klatka jest
-    # prawdziwym pomiarem; nie ma czego poprawiać ani co udawać.
-    if len(idx) < 3 or len(idx) > 0.8 * len(q):
+    # Mniej niż trzy punkty — nie ma czego interpolować.
+    #
+    # Powyżej progu HELD_RATIO wierszy z nową wartością uznajemy, że
+    # czujnik nadaje w pełnym tempie i każda klatka jest pomiarem.
+    # Próg jest nisko (połowa), bo interpolacja ZASTĘPUJE zmierzone
+    # wartości rampą — przy 80%, jak było wcześniej, wystarczyło, żeby
+    # co piąta próbka powtórzyła się przez samo zaokrąglenie drobnego
+    # ruchu, i cały zapis szedł przez wygładzanie, którego nie
+    # potrzebował. Interpolujemy dopiero wtedy, gdy przetrzymywanie
+    # próbek jest ewidentne, a nie „możliwe”.
+    if len(idx) < 3 or len(idx) > HELD_RATIO * len(q):
+        return q, False
+
+    # Nie każda przerwa między zmianami jest przetrzymaną próbką.
+    #
+    # Gdy nadgarstek stoi, rotation vector NIE ZMIENIA SIĘ, bo nie ma
+    # czego mierzyć — i wygląda to w pliku dokładnie tak samo jak
+    # przetrzymanie. Interpolacja przez taką przerwę rozciąga początek
+    # obrotu wstecz na całą poprzedzającą go chwilę bezruchu: animacja
+    # pokazuje wtedy powolny obrót w momencie, w którym ręka jeszcze
+    # stała. Dlatego mostkujemy tylko przerwy porównywalne z typowym
+    # okresem aktualizacji; w dłuższych wstawiamy węzeł HELD_SPAN
+    # okresów przed zmianą, więc wartość jest TRZYMANA aż do chwili,
+    # w której czujnik mógł ją realnie zaktualizować.
+    okres = max(1, int(np.median(np.diff(idx))))
+    limit = max(2, int(round(okres * HELD_SPAN)))
+
+    przytrzymania = [i1 - limit for i0, i1 in zip(idx[:-1], idx[1:])
+                     if i1 - i0 > limit]
+    if przytrzymania:
+        idx = np.union1d(idx, np.asarray(przytrzymania, dtype=idx.dtype))
+
+    # Po wstawieniu węzłów może się okazać, że nie ma już czego
+    # interpolować — same sąsiadujące próbki. Wtedy oddajemy oryginał
+    # i mówimy wprost, że nic nie dokładaliśmy.
+    if not np.any(np.diff(idx) > 1):
         return q, False
 
     out = np.empty_like(q)
@@ -504,7 +623,28 @@ def describe(prep):
 #  POZYCJA
 # ============================================================
 
-def _zupt(v, a, gyr):
+def _activity(x, win):
+    """Wartość skuteczna (RMS) długości wektora w oknie `win` próbek.
+
+    To jest miara AKTYWNOŚCI, a nie chwilowej wartości: rośnie zarówno
+    od stałego wychylenia, jak i od wahań wokół zera. Dzięki temu
+    odróżnia prawdziwy bezruch od przejścia przyspieszenia przez zero
+    w środku ruchu, gdzie chwilowa wartość też jest mała, ale tuż obok
+    stoją oba szczyty.
+    """
+    kwadraty = (x * x).sum(axis=1)[:, None]
+    return np.sqrt(np.maximum(_moving_average(kwadraty, max(3, win))[:, 0], 0.0))
+
+
+def _still_threshold(akt, kwantyl_margines, lo, hi):
+    """Próg bezruchu wyliczony z rozkładu aktywności w tym zakresie."""
+    if len(akt) == 0:
+        return lo
+    return float(np.clip(np.quantile(akt, STILL_QUANTILE) * kwantyl_margines,
+                         lo, hi))
+
+
+def _zupt(v, a, gyr, win, min_len):
     """Zerowanie prędkości w chwilach bezruchu (Zero-velocity UPdaTe).
 
     Jeśli w oknie są momenty, w których ręka faktycznie stoi — a przy
@@ -515,45 +655,108 @@ def _zupt(v, a, gyr):
 
     To jest najskuteczniejszy pojedynczy zabieg na całej ścieżce: bez
     niego pozycja odpływa liniowo i tor uderzenia wygląda jak spirala.
-    """
-    stoi = np.linalg.norm(a, axis=1) < STILL_ACC
-    if gyr is not None:
-        stoi &= np.linalg.norm(gyr, axis=1) < STILL_GYR
-    stoi = _runs_at_least(stoi, MIN_STILL)
 
-    wezly = np.nonzero(stoi)[0]
+    PRÓG DOBIERA SIĘ DO ZAPISU, A NIE ODWROTNIE
+    -------------------------------------------
+    Próg jest tu wprost pokrętłem „ile prawdziwego wolnego ruchu
+    skasować”: wszystko, co pod niego wpadnie, dostaje prędkość zero,
+    nawet jeśli ręka naprawdę się przesuwała. Dlatego nie jest stałą,
+    tylko wynika z rozkładu aktywności w TYM zakresie — zaczyna od
+    najcichszych dziesięciu procent i rozluźnia się dopiero wtedy, gdy
+    przy takim progu nie ma ani jednego postoju.
+
+    Zwraca (prędkość, liczba próbek bezruchu, użyte progi albo None).
+    None znaczy: nie znaleziono bezruchu nawet przy najluźniejszym progu,
+    prędkość wraca nietknięta i dryfem musi zająć się filtr.
+    """
+    akt_a = _activity(a, win)
+    akt_g = _activity(gyr, win) if gyr is not None else None
+
+    margines = STILL_MARGIN
+    stoi = None
+    wezly = np.empty(0, dtype=np.int64)
+    prog_a = prog_g = 0.0
+
+    for _ in range(STILL_STEPS):
+        prog_a = _still_threshold(akt_a, margines, STILL_ACC_MIN, STILL_ACC_MAX)
+        stoi = akt_a < prog_a
+        if akt_g is not None:
+            prog_g = _still_threshold(akt_g, margines, STILL_GYR_MIN, STILL_GYR_MAX)
+            stoi = stoi & (akt_g < prog_g)
+
+        stoi = _runs_at_least(stoi, min_len, erode=win // 2)
+        wezly = np.nonzero(stoi)[0]
+        if len(wezly) >= 2:
+            break
+        if prog_a >= STILL_ACC_MAX and (akt_g is None or prog_g >= STILL_GYR_MAX):
+            break
+        margines *= STILL_RELAX
+
     if len(wezly) < 2:
-        return v, 0
+        return v, 0, None
 
     osie = np.arange(len(v), dtype=np.float64)
     dryf = np.empty_like(v)
     for k in range(3):
         dryf[:, k] = np.interp(osie, wezly, v[wezly, k])
-    return v - dryf, int(stoi.sum())
+    return v - dryf, int(stoi.sum()), (prog_a, prog_g if akt_g is not None else None)
 
 
 def _positions(a_world, gyr, dt, hp_hz, zupt):
     """Przyspieszenie w układzie świata → prędkość → pozycja.
 
-    Po każdym całkowaniu wchodzi filtr górnoprzepustowy, bo każde
-    całkowanie zamienia resztkową stałą składową w rampę: stały błąd
-    przyspieszenia 0.05 m/s² (a tyle daje błąd orientacji rzędu 0.3°)
-    to po dwóch sekundach 10 cm odpłynięcia.
+    Całkowanie zamienia każdą resztkową stałą składową w rampę: stały
+    błąd przyspieszenia 0.05 m/s² (a tyle daje błąd orientacji rzędu
+    0.3°) to po dwóch sekundach 10 cm odpłynięcia. Trzeba więc coś z tym
+    zrobić — pytanie tylko, CZYM.
+
+    DRYF ZDEJMUJE SIĘ RAZ, NIE TRZY RAZY
+    ------------------------------------
+    Wcześniej prędkość przechodziła i przez filtr górnoprzepustowy,
+    i przez ZUPT, a potem to samo dostawała jeszcze pozycja. Te zabiegi
+    nie sumują się w „lepiej”: ZUPT opiera się na chwilach, w których
+    prędkość NAPRAWDĘ była zerowa, i po nim rampy już nie ma, więc drugi,
+    ślepy filtr na tym samym sygnale zabierał tylko kawałek prawdziwego
+    wolnego ruchu. Teraz:
+
+      • ZUPT znalazł postoje → filtr na prędkości NIE wchodzi wcale,
+        a ten na pozycji jest o oktawę łagodniejszy (zostaje jako
+        zabezpieczenie przed resztką, nie jako główny mechanizm);
+      • ZUPT nie znalazł nic → wracamy do ślepego detrendu na obu
+        etapach, bo bez niego pozycja odpłynie. To jest gorsza droga
+        i dlatego wraca w `meta` — użytkownik ma wiedzieć, że oglądał
+        rekonstrukcję bez punktu zaczepienia.
+
+    Filtr górnoprzepustowy jest tu ODEJMOWANIEM średniej kroczącej, więc
+    NIE tłumi wysokich częstotliwości — drobny, szybki ruch przechodzi
+    przez niego nietknięty. Ubywa wyłącznie tego, co wolniejsze od hp_hz.
     """
     krok = float(np.median(dt))
 
+    def probki(sekundy, minimum):
+        return max(minimum, int(round(sekundy / krok))) if krok > 0 else minimum
+
     a = _highpass(a_world, krok, hp_hz)
     v = _cumtrapz(a, dt)
-    v = _highpass(v, krok, hp_hz)
 
-    postoje = 0
+    postoje, progi = 0, None
     if zupt:
-        v, postoje = _zupt(v, a, gyr)
+        v, postoje, progi = _zupt(
+            v, a, gyr,
+            probki(STILL_WIN_S, MIN_STILL_SAMPLES),
+            probki(MIN_STILL_S, MIN_STILL_SAMPLES),
+        )
+
+    if progi is None:
+        v = _highpass(v, krok, hp_hz)
+        hp_pos = hp_hz
+    else:
+        hp_pos = hp_hz * 0.5
 
     p = _cumtrapz(v, dt)
-    p = _highpass(p, krok, hp_hz)
+    p = _highpass(p, krok, hp_pos)
 
-    return p, v, postoje
+    return p, v, postoje, progi
 
 
 # ============================================================
@@ -637,6 +840,7 @@ def _phase_spans(phases, t_probek, lo, hi, t_klatek):
         szczelina = pozniejszy["i0"] - wczesniejszy["i1"]
         if 1 < szczelina <= MAX_PHASE_GAP + 1:
             pozniejszy["i0"] = wczesniejszy["i1"] + 1
+
 
     return out
 
@@ -848,7 +1052,7 @@ def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
         pozycja_znana = False
 
     # ---------- pozycja ----------
-    pos, vel, postoje = _positions(a_world, gyr, dt, hp_hz, zupt)
+    pos, vel, postoje, progi_zupt = _positions(a_world, gyr, dt, hp_hz, zupt)
 
     # ---------- klatki = próbki z pliku ----------
     czas = float(t[-1])
@@ -889,11 +1093,25 @@ def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
     pos_cm = pos_k * 100.0 * float(pos_scale)
 
     # ---------- zakres sceny ----------
+    #
+    # Bok sześcianu to rozpiętość ruchu POWIĘKSZONA dokładnie o tyle, ile
+    # wystaje poza nadgarstek bryła zegarka razem z osiami urządzenia.
+    # Plotly przycina wszystko, co wypada poza `range`, a osie sięgały
+    # dalej niż margines — więc za każdym razem, gdy ręka dochodziła do
+    # skraju swojego toru, osie chowały się pod ścianą sceny. Działo się
+    # to w położeniach skrajnych, czyli tam, gdzie akurat najwięcej widać.
     srodek = (pos_cm.max(axis=0) + pos_cm.min(axis=0)) / 2.0
     rozpietosc = float((pos_cm.max(axis=0) - pos_cm.min(axis=0)).max())
-    # Minimalny bok sceny: przy prawie nieruchomej ręce sześcian o boku
-    # 2 mm pokazywałby szum jako wielki ruch. 6 cm to skala nadgarstka.
-    bok = max(rozpietosc * 1.35, 6.0)
+
+    # Skala odniesienia dla bryły i osi. Przy ruchu drobniejszym niż
+    # MIN_SPAN_CM bierze się z podłogi — inaczej zegarek kurczyłby się
+    # razem z ruchem i nie byłoby po nim widać, jak jest obrócony.
+    skala = max(rozpietosc, MIN_SPAN_CM)
+    rozmiar_watch = skala * WATCH_FRACTION * float(watch_scale)
+    dlugosc_osi = rozmiar_watch * AXIS_FRACTION
+    margines = max(dlugosc_osi, rozmiar_watch * WATCH_RADIUS) * 1.08
+
+    bok = max(rozpietosc + 2.0 * margines, MIN_SPAN_CM)
     zakres = {
         "x": (srodek[0] - bok / 2, srodek[0] + bok / 2),
         "y": (srodek[1] - bok / 2, srodek[1] + bok / 2),
@@ -910,31 +1128,56 @@ def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
     figure, dynamiczne = _build_figure(pos_cm, zakres)
 
     # ---------- bryła zegarka i osie ----------
-    # `bok` jest bokiem sceny w CENTYMETRACH, więc bryła i osie też —
-    # nic tu już nie przelicza się na metry i z powrotem.
-    rozmiar_watch = bok * 0.16 * float(watch_scale)
+    # `rozmiar_watch` policzył się wyżej, razem z marginesem sceny —
+    # jedno zależy od drugiego i nie może się rozjechać. Wszystko jest
+    # w CENTYMETRACH, nic tu już nie wraca na metry.
     verts, faces = _watch_geometry(rozmiar_watch)
 
     etykieta = f"{opis_orientacji}, pozycja z {opis_acc}"
+
+    # Opis obróbki, która NAPRAWDĘ weszła na ten konkretny zapis. Nie
+    # deklaracja z dokumentacji, tylko użyte progi — po to, żeby dało się
+    # odróżnić „ruchu nie było” od „ruch wpadł pod próg i został zdjęty”.
+    if not pozycja_znana:
+        opis_filtrow = "brak akcelerometru — pozycji nie liczymy"
+    elif not zupt:
+        opis_filtrow = (f"ZUPT wyłączony w zapytaniu, "
+                        f"detrend {hp_hz:g} Hz na prędkości i pozycji")
+    elif progi_zupt is None:
+        opis_filtrow = (f"detrend {hp_hz:g} Hz na prędkości i pozycji, "
+                        f"bez ZUPT — w zakresie nie ma chwili bezruchu, "
+                        f"o którą można zaczepić zero")
+    else:
+        progi_opis = f"|a| < {progi_zupt[0]:.3f} m/s²"
+        if progi_zupt[1] is not None:
+            progi_opis += f" i |ω| < {progi_zupt[1]:.3f} rad/s"
+        opis_filtrow = (f"ZUPT przy {progi_opis} (aktywność w oknie "
+                        f"{STILL_WIN_S * 1000:.0f} ms), "
+                        f"detrend pozycji {hp_hz * 0.5:g} Hz")
 
     return {
         "figure": figure,
         "payload": {
             "t": [round(float(v), 4) for v in tk],
-            "pos": [[round(float(c), 3) for c in wiersz] for wiersz in pos_cm],
-            "quat": [[round(float(c), 5) for c in wiersz] for wiersz in q_k],
+            # Cztery miejsca po przecinku w centymetrach to mikrometr.
+            # Trzy (10 µm) wystarczały, dopóki najmniejsza scena miała
+            # 6 cm; przy scenie centymetrowej byłaby to już jedna
+            # tysięczna kadru, czyli widoczne schodki na drobnym ruchu.
+            "pos": [[round(float(c), 4) for c in wiersz] for wiersz in pos_cm],
+            "quat": [[round(float(c), 6) for c in wiersz] for wiersz in q_k],
             "speed": [round(float(v), 4) for v in np.linalg.norm(vel_k, axis=1)],
             "phase": faza_klatki.tolist(),
-            "verts": [[round(c, 3) for c in v] for v in verts],
+            "verts": [[round(c, 4) for c in v] for v in verts],
             "faces": {"i": [f[0] for f in faces],
                       "j": [f[1] for f in faces],
                       "k": [f[2] for f in faces]},
-            "axis_len": round(rozmiar_watch * 1.7, 3),
+            "axis_len": round(dlugosc_osi, 4),
             "dynamic": dynamiczne,
             "spans": spans,
         },
         "meta": {
             "label": etykieta,
+            "filters": opis_filtrow,
             "source": source,
             "frames": klatki,
             # Ostatnia klatka JEST ostatnią próbką zaznaczenia, więc czas
@@ -956,6 +1199,19 @@ def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
             "time_source": prep["time_source"],
             "gaps": prep["gaps"],
             "still_samples": postoje,
+            # Bok sześcianu sceny. Bez tej liczby „mały ruch” i „duży
+            # ruch” wyglądają na ekranie tak samo — scena skaluje się
+            # do zawartości, więc dopiero ona mówi, co się właściwie
+            # ogląda.
+            "span_cm": round(bok, 3),
+            "hp_hz": round(float(hp_hz), 4),
+            # Progi, przy których faktycznie zadziałał ZUPT (None =
+            # nie zadziałał wcale). Pokazujemy je, bo to jedyny zabieg
+            # w całej ścieżce, który KASUJE zmierzony ruch.
+            "still_threshold": ({"acc": round(progi_zupt[0], 5),
+                                 "gyr": (round(progi_zupt[1], 5)
+                                         if progi_zupt[1] is not None else None)}
+                                if progi_zupt else None),
             "phases": spans,
         },
     }

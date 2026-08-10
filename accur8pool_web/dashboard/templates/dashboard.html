@@ -200,6 +200,15 @@
                                     aria-label="Uderzenie do animacji" disabled>
                                 <option value="">Ładowanie segmentów…</option>
                             </select>
+                            <!-- Obrót i przybliżenie sceny zostają takie,
+                                 jakie ustawił widz — także po zmianie
+                                 segmentu. To jest jedyna droga powrotu
+                                 do widoku domyślnego. -->
+                            <button type="button" class="btn btn-ghost btn-sm"
+                                    id="m3d-reset-view">
+                                <span aria-hidden="true">🔍</span>
+                                <span class="btn-label">Reset widoku</span>
+                            </button>
                             <button type="button"
                                     class="btn btn-ghost btn-sm"
                                     id="m3d-fullscreen"

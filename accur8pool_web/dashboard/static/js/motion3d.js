@@ -23,6 +23,14 @@
    rzut na podłogę) są już narysowane raz na zawsze. Przeglądarka rusza
    co klatkę tylko sześć śladów: ogon, bryłę zegarka, trzy osie i punkt.
    Ich numery przychodzą w payload.dynamic — nie zgadujemy ich tutaj.
+
+   KAMERA NALEŻY DO WIDZA, NIE DO DANYCH
+   -------------------------------------
+   Obrót i przybliżenie sceny są pamiętane po stronie przeglądarki
+   i przeżywają podmianę segmentu, przeliczenie po zmianie faz, powrót
+   na zakładkę oraz przeładowanie strony. Kamera z layoutu serwera jest
+   tylko ustawieniem startowym dla kogoś, kto jeszcze nic nie wybrał.
+   Szczegóły w sekcji KAMERA niżej.
    ============================================================ */
 
 document.addEventListener('DOMContentLoaded', function () {
@@ -38,6 +46,7 @@ document.addEventListener('DOMContentLoaded', function () {
         label: document.getElementById('m3d-label'),
 
         source: document.getElementById('m3d-source'),
+        resetView: document.getElementById('m3d-reset-view'),
         play: document.getElementById('m3d-play'),
         playLabel: document.getElementById('m3d-play-label'),
         speed: document.getElementById('m3d-speed'),
@@ -144,6 +153,95 @@ document.addEventListener('DOMContentLoaded', function () {
     let raf = null;
 
     const cache = new Map();
+
+    // ============================================================
+    //  KAMERA
+    //
+    //  Ustawienie kamery jest STANEM UŻYTKOWNIKA, nie częścią danych.
+    //  Serwer przysyła ją w każdej scenie, bo musi mieć jakieś
+    //  ustawienie startowe, ale gdy widz raz obrócił albo przybliżył
+    //  scenę, jego wybór wygrywa ze wszystkim, co przyjdzie później:
+    //  z podmianą segmentu, z przeliczeniem po zmianie faz i z
+    //  powrotem na zakładkę 3D. Porównywanie dwóch uderzeń polega na
+    //  oglądaniu ich POD TYM SAMYM KĄTEM — animacja, która przy każdym
+    //  przełączeniu wraca do widoku domyślnego, robi z tego zgadywankę.
+    //
+    //  Samo `uirevision` w layoucie tu nie wystarcza: trzyma widok przy
+    //  Plotly.react, ale nie przeżywa przeładowania strony ani sytuacji,
+    //  w której wykres trzeba postawić od nowa (Plotly.newPlot).
+    //  Dlatego kamerę pamiętamy tutaj i wstawiamy do layoutu sami.
+    // ============================================================
+
+    const CAMERA_KEY = 'a8.motion3d.camera';
+
+    let camera = null;         // ostatni widok wybrany przez użytkownika
+    let cameraDefault = null;  // widok domyślny z pierwszej sceny — do resetu
+    let cameraHooked = false;  // czy nasłuch na plotly_relayout już wisi
+    let applyingCamera = false;
+
+    function readCamera() {
+        try {
+            const raw = sessionStorage.getItem(CAMERA_KEY);
+            return raw ? JSON.parse(raw) : null;
+        } catch (err) {
+            return null;   // tryb prywatny albo zablokowany magazyn
+        }
+    }
+
+    function saveCamera(cam) {
+        camera = cam;
+        try {
+            sessionStorage.setItem(CAMERA_KEY, JSON.stringify(cam));
+        } catch (err) {
+            /* Zapis może się nie udać i to nie jest powód, żeby przestać
+               pamiętać widok w tej karcie — `camera` działa dalej. */
+        }
+    }
+
+    camera = readCamera();
+
+    /** Layout sceny z kamerą użytkownika w miejscu domyślnej. */
+    function layoutWithCamera(layout) {
+        const scene = Object.assign({}, layout.scene);
+        if (!cameraDefault && scene.camera) cameraDefault = scene.camera;
+        if (camera) scene.camera = camera;
+        return Object.assign({}, layout, { scene: scene });
+    }
+
+    /** Zapamiętuje kamerę po każdym obrocie i przybliżeniu sceny. */
+    function hookCamera() {
+        if (cameraHooked || !els.plot.on) return;
+        cameraHooked = true;
+
+        els.plot.on('plotly_relayout', function (ev) {
+            if (applyingCamera) return;
+            // Plotly melduje kamerę raz jako klucz ze ścieżką, raz jako
+            // zagnieżdżony obiekt — zależnie od tego, co ją zmieniło.
+            // Gdy nie ma jej w zdarzeniu (np. samo przeskalowanie
+            // kontenera), bierzemy bieżącą z layoutu wykresu: jest wtedy
+            // ta sama, więc zapis niczego nie psuje.
+            const cam =
+                (ev && (ev['scene.camera'] || (ev.scene && ev.scene.camera))) ||
+                (els.plot.layout && els.plot.layout.scene &&
+                 els.plot.layout.scene.camera);
+            if (cam) saveCamera(cam);
+        });
+    }
+
+    function resetCamera() {
+        camera = null;
+        try { sessionStorage.removeItem(CAMERA_KEY); } catch (err) { /* jw. */ }
+        if (!plotted || !cameraDefault) return;
+
+        // Reset idzie przez relayout, a nie przez podanie kamery w react:
+        // przy niezmienionym `uirevision` Plotly celowo IGNORUJE kamerę
+        // z nowego layoutu, żeby nie kasować tego, co ustawił widz.
+        // Relayout jest jawną zmianą i wygrywa — o to nam tutaj chodzi.
+        applyingCamera = true;
+        Promise.resolve(Plotly.relayout(els.plot, { 'scene.camera': cameraDefault }))
+            .catch(err => console.error('Plotly 3D:', err))
+            .then(function () { applyingCamera = false; });
+    }
 
     // ============================================================
     //  MATEMATYKA
@@ -288,15 +386,20 @@ document.addEventListener('DOMContentLoaded', function () {
         const meta = body.meta;
         const payload = body.payload;
 
+        // Kamera z layoutu serwera jest tylko ustawieniem startowym —
+        // gdy widz coś już wybrał, wchodzi jego widok.
+        const layout = layoutWithCamera(body.figure.layout);
+
         const rysuj = plotted
-            ? Plotly.react(els.plot, body.figure.data, body.figure.layout)
-            : Plotly.newPlot(els.plot, body.figure.data, body.figure.layout, {
+            ? Plotly.react(els.plot, body.figure.data, layout)
+            : Plotly.newPlot(els.plot, body.figure.data, layout, {
                   responsive: true,
                   displayModeBar: false
               });
 
         rysuj.then(function () {
             plotted = true;
+            hookCamera();
             // Trójkąty bryły zegarka nie zmieniają się przez całą animację,
             // więc idą raz — co klatkę lecą już same współrzędne wierzchołków.
             return Plotly.restyle(els.plot, {
@@ -310,11 +413,16 @@ document.addEventListener('DOMContentLoaded', function () {
         }).catch(err => console.error('Plotly 3D:', err));
 
         // ---- opisy ----
-        // Podtytuł ma mówić wprost, co jest POMIAREM, a co rekonstrukcją.
-        // Orientacja jest mierzona, pozycja powstaje z dwukrotnego
-        // całkowania i z natury nie zawiera niczego powyżej kilku herców.
+        // Podtytuł ma mówić wprost, co jest POMIAREM, a co rekonstrukcją,
+        // i CO Z SYGNAŁU UBYŁO. Orientacja jest mierzona, pozycja powstaje
+        // z dwukrotnego całkowania. Progi, przy których zadziałał ZUPT,
+        // i bok sceny idą tu razem z resztą, bo bez nich nie da się
+        // odróżnić „ruchu nie było” od „ruch wpadł pod próg”, ani ocenić,
+        // czy ogląda się centymetry, czy milimetry.
         if (els.label) {
             const czesci = [req.name, meta.label];
+            if (meta.filters) czesci.push(meta.filters);
+            if (meta.span_cm) czesci.push('scena ' + meta.span_cm.toFixed(1) + ' cm');
             if (meta.stride > 1) czesci.push('co ' + meta.stride + '. próbka');
             if (meta.gaps) czesci.push(meta.gaps + ' × przerwa w nagraniu (skrócona)');
             if (!meta.has_position) czesci.push('bez akcelerometru — sam obrót');
@@ -557,6 +665,12 @@ document.addEventListener('DOMContentLoaded', function () {
             pause();
             load(true);
         });
+    }
+
+    // Skoro widok nie resetuje się już sam, musi być czym go cofnąć —
+    // inaczej z mocno przybliżonej sceny nie ma jak wrócić.
+    if (els.resetView) {
+        els.resetView.addEventListener('click', resetCamera);
     }
 
     // Lista uderzeń w rozwijanym wyborze. Bierze się z segments.js, więc
