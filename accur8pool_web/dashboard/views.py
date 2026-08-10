@@ -49,11 +49,10 @@ MAX_ROW_INDEX = 2_147_483_647
 # to zawsze prawdziwy wiersz CSV, a limit decyduje tylko o tym, czy przy
 # szybkim zapisie brać co drugą albo co czwartą.
 #
-# Bez parametru w zapytaniu limitu NIE MA (0 = brak). Przeglądarka celowo
-# go nie wysyła, bo odtwarzacz dobiera klatkę po czasie z zegara i chce
-# widzieć to, co czujnik zmierzył — razem z nierównym odstępem między
-# pomiarami. Rozmiaru odpowiedzi i tak pilnuje motion3d.MAX_FRAMES.
-NO_FPS_LIMIT = 0.0
+# Bez parametru w zapytaniu limitu NIE MA. Przeglądarka celowo go nie
+# wysyła, bo odtwarzacz dobiera klatkę po czasie z zegara i chce widzieć
+# to, co czujnik zmierzył — razem z nierównym odstępem między pomiarami.
+# Rozmiaru odpowiedzi i tak pilnuje motion3d.MAX_FRAMES.
 MIN_FPS = 5.0
 MAX_FPS = 1000.0
 
@@ -79,11 +78,47 @@ def _dataset_path(user, dataset):
     przetworzyć (np. zapis bez magnetometru). Dzięki temu brak wersji
     przygotowanej degraduje widok do poprzedniego zachowania, zamiast
     zamieniać go w błąd 404.
+
+    UWAGA: animacja 3D ma odwrotne pierwszeństwo i czyta surowy plik —
+    patrz _dataset_raw_path. Filtrowanie, które pomaga wykresowi 2D,
+    psuje wektor obrotu.
     """
     prepared_path = _user_prepared_dir(user) / dataset.filename
     if prepared_path.exists():
         return prepared_path
     return _user_dir(user) / dataset.filename
+
+
+def _dataset_raw_path(user, dataset):
+    """Plik, z którego czyta ANIMACJA 3D: surowy, a w zapasie przygotowany.
+
+    Odwrotnie niż _dataset_path — i to jest celowe. Rekonstrukcja
+    orientacji potrzebuje wektora obrotu DOKŁADNIE takiego, jaki wystawił
+    czujnik, a transform_raw_df robi z nim trzy rzeczy naraz, z których
+    każda osobno wystarczy, żeby animacja zaczęła wariować:
+
+      • filtruje rotx/roty/rotz dolnoprzepustowo (Butterworth + filtfilt,
+        granica 5 Hz), a `rotw` zostawia nietknięte — po tym zabiegu
+        czwarta składowa przestaje pasować do trzech pozostałych i test
+        wiarygodności w _quat_from_rotvec odrzuca ją, choć była dobra;
+      • filtfilt na Butterworcie PRZESTRZELIWUJE na szybkim zboczu, więc
+        |rot| potrafi wyjść poza 1, czego dla sinusa połowy kąta nie da
+        się zinterpretować inaczej niż jako uszkodzenie;
+      • lowpass_filter ma zaszyte fs=100 Hz, więc przy zapisie o innym
+        tempie faktyczna granica jest zupełnie inna niż deklarowana.
+
+    Kwaternion to nie jest sygnał, który wolno filtrować składowa po
+    składowej — jego składowe wiąże warunek |q| = 1, a filtr o tym nie
+    wie. Wersja przygotowana zostaje dobra do wykresu 2D i do dalszego
+    przetwarzania; do odtwarzania ruchu potrzebny jest oryginał.
+
+    Zapas na wersję przygotowaną jest dla zestawów, których surowy plik
+    zniknął — lepiej pokazać animację z zastrzeżeniem niż 404.
+    """
+    raw_path = _user_dir(user) / dataset.filename
+    if raw_path.exists():
+        return raw_path, True
+    return _user_prepared_dir(user) / dataset.filename, False
 
 
 def _prepare_uploaded_file(user, raw_path, filename):
@@ -444,11 +479,11 @@ def api_dataset_motion3d(request, filename):
     """Scena Plotly + klatki animacji dla JEDNEGO segmentu.
 
     Zakres bierze się WYŁĄCZNIE z segmentu w bazie (?segment=<id>), nigdy
-    z widocznego fragmentu wykresu. Pozycja powstaje z dwukrotnego
-    całkowania przyspieszenia i trzyma się tylko na odcinku długości
-    uderzenia — puszczona na dowolnym zakresie, który akurat widać na
-    ekranie, pokazuje ruch, którego nie było. Segment jest więc częścią
-    kontraktu, a nie wygodą: bez niego nie ma czego liczyć.
+    z widocznego fragmentu wykresu. Tor nadgarstka powstaje z modelu
+    sztywnej dźwigni dopasowanego do TEGO ruchu (motion3d._lever_fit),
+    a taki model opisuje jedno uderzenie, nie kwadrans nagrania, w którym
+    łokieć zdążył zmienić położenie kilkaset razy. Segment jest więc
+    częścią kontraktu, a nie wygodą: bez niego nie ma czego dopasować.
 
     Czyta CSV przez motion3d.prepare(), a NIE przez _load_series — tam
     wartości są znormalizowane do 0–1 i jednostki fizyczne już nie
@@ -475,7 +510,7 @@ def api_dataset_motion3d(request, filename):
     if error:
         return error
 
-    path = _dataset_path(request.user, dataset)
+    path, surowy = _dataset_raw_path(request.user, dataset)
     if not path.exists():
         return JsonResponse({"error": "Plik nie istnieje na serwerze."}, status=404)
 
@@ -502,12 +537,9 @@ def api_dataset_motion3d(request, filename):
             ("hi", segment.end),
             ("phases", _phase_tuples(segment)),
             ("fps", clamp(num("fps", MIN_FPS), MIN_FPS, MAX_FPS)
-            if request.GET.get("fps") else NO_FPS_LIMIT),
-            ("hp_hz", clamp(num("hp", 0.35), 0.0, 20.0)),
-            ("zupt", flag("zupt", True)),
+             if request.GET.get("fps") else motion3d.NO_FPS_LIMIT),
             ("smooth", flag("smooth", True)),
             ("watch_scale", clamp(num("watch", 1.0), 0.2, 20.0)),
-            ("pos_scale", clamp(num("posScale", 1.0), 0.1, 50.0)),
         )
     except (TypeError, ValueError):
         return HttpResponseBadRequest("Nieprawidłowe parametry animacji 3D.")
@@ -522,6 +554,15 @@ def api_dataset_motion3d(request, filename):
     except Exception:
         logger.exception("Rekonstrukcja 3D nie powiodła się: %s", path)
         return JsonResponse({"error": "Nie udało się zbudować animacji 3D."}, status=500)
+
+    if not surowy:
+        # Zastrzeżenie leci do podtytułu sceny, bo wpływa na to, CO widać:
+        # rot* w tej wersji pliku są przefiltrowane i orientacja może być
+        # zaokrąglona albo poszarpana. Patrz _dataset_raw_path.
+        result = {**result, "meta": {
+            **result["meta"],
+            "source_file": "przygotowany (brak surowego) — rot* przefiltrowane",
+        }}
 
     return JsonResponse(result)
 

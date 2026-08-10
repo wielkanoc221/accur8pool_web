@@ -103,14 +103,27 @@
 
 /* Scena bez własnej wysokości zwija się do zera — Plotly rysuje wykres
    3D dokładnie tak duży, jak duży jest kontener w chwili tworzenia. */
+/* Scena jest CIEMNA, jako jedyny element jasnego dashboardu. To nie jest
+   ozdoba: animacja to jasny obiekt w ruchu na tle nieruchomej siatki,
+   a na białym tle jedno i drugie ma ten sam ciężar i tor gubi się
+   w gridzie. Tło kanwy ustawia layout Plotly (motion3d.py), tutaj jest
+   ten sam kolor pod spodem — inaczej w chwili tworzenia wykresu mignąłby
+   biały prostokąt. */
 .m3d-stage {
     flex: 1;
     display: flex;
     min-height: 420px;
-    background: #fafbfc;
+    background: #0b1220;
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     overflow: hidden;
+}
+
+/* Komunikat na ciemnym tle — domyślny kolor tekstu pustego stanu jest
+   ustawiony pod jasną kartę i tutaj byłby nieczytelny. */
+.m3d-stage .m3d-state,
+.m3d-stage .m3d-state p {
+    color: #94a3b8;
 }
 
 .m3d-stage .plot-area {
@@ -170,6 +183,14 @@
     cursor: not-allowed;
     transform: none;
     box-shadow: none;
+}
+
+/* Pętla jest przełącznikiem, nie akcją — stan włączony musi być widoczny
+   bez najeżdżania myszą, bo od niego zależy, czy animacja się zatrzyma. */
+.m3d-loop.is-active {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
 }
 
 .m3d-select {

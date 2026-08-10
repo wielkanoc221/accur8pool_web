@@ -5,43 +5,81 @@ oddaje gotową scenę Plotly plus klatki animacji. Nie wie nic o Django,
 o segmentach w bazie ani o tym, kto na to patrzy — dzięki temu daje się
 testować na danych syntetycznych o znanej kinematyce.
 
-CO JEST TRUDNE W TYCH DANYCH
-----------------------------
+SKĄD BIERZE SIĘ RUCH
+--------------------
+Zegarek mierzy DWIE rzeczy naprawdę: orientację (rotation vector albo
+żyroskop) i przyspieszenie. Pozycji nie mierzy nikt.
+
+Poprzednia wersja robiła pozycję z DWUKROTNEGO CAŁKOWANIA przyspieszenia
+i cała reszta pliku była walką ze skutkami tej decyzji: filtry
+górnoprzepustowe, wykrywanie bezruchu, progi dobierane z kwantyli,
+zerowanie prędkości (ZUPT). Nie da się tego wygrać na odcinku jednego
+uderzenia. Błąd orientacji rzędu 0.3° zostawia w przyspieszeniu stałą
+0.05 m/s², a to po dwóch sekundach 10 cm odpłynięcia — więc tor uderzenia
+wychodził spiralą. Filtr, który by to skasował, musi mieć częstotliwość
+graniczną rzędu 0.3 Hz, czyli akurat tam, gdzie leży samo uderzenie:
+lekarstwo zjadało pacjenta. Stąd animacja, która „słabo wygląda”.
+
+Tutaj pozycja bierze się z KINEMATYKI, a nie z całkowania. Uderzenie
+w bilardzie to ruch wahadłowy: łokieć stoi, przedramię się kołysze,
+nadgarstek jedzie po łuku. Zegarek jest więc na końcu sztywnej dźwigni
+obracającej się wokół nieruchomego punktu:
+
+    p(t) = R(t) · d
+
+gdzie R(t) to ZMIERZONA orientacja, a d — stały wektor od osi obrotu do
+zegarka, wyrażony w układzie urządzenia. Nieznana jest jedna trójka
+liczb na cały segment, a nie trajektoria w każdej próbce. Wektor d liczy
+się metodą najmniejszych kwadratów z przyspieszenia, bo dla takiej
+dźwigni
+
+    a(t) = R(t) · ( [ω̇]ₓ + [ω]ₓ[ω]ₓ ) · d
+
+jest LINIOWE względem d (patrz _lever_fit). Trzy niewiadome na kilkaset
+równań — problem jest przeskalowany tysiąckrotnie, więc szum się uśrednia
+zamiast narastać. Pozycja nie dryfuje, bo nigdzie nie ma całkowania,
+a tor jest gładki, bo powstaje wprost z orientacji.
+
+Za to model NIE POKAŻE czystego przesunięcia bez obrotu — takiego ruchu
+nie ma z czego odtworzyć. Jakość dopasowania (ile procent zmierzonego
+przyspieszenia tłumaczy dźwignia) wraca w `meta.lever_fit` i interfejs
+ma ją pokazać, żeby dało się odróżnić rekonstrukcję od zgadywanki.
+
+CO JESZCZE JEST TRUDNE W TYCH DANYCH
+------------------------------------
 1. Oś czasu ma w każdym pokoleniu pliku inne znaczenie. Widzieliśmy trzy:
    `timestamp` jako bezwzględne nanosekundy (elapsedRealtimeNanos),
    `timestamp` jako ODSTĘP od poprzedniej próbki w milisekundach, oraz
-   `timestamp` jako ten sam odstęp, ale w sekundach — obok kolumny `time`
-   z czasem narastającym. Interpretacja liczb wprost, bez rozpoznania
-   jednostki, myli się o trzy rzędy wielkości i animacja leci 1000× za
-   szybko albo za wolno. Dlatego oś czasu jest WYKRYWANA (_time_axis),
-   a nie zakładana. To jedyne miejsce, w którym powstaje czas w sekundach
-   i wszystko dalej liczy się z niego.
+   ten sam odstęp w sekundach — obok kolumny `time` z czasem narastającym.
+   Interpretacja wprost, bez rozpoznania jednostki, myli się o trzy rzędy
+   wielkości i animacja leci 1000× za szybko albo za wolno. Dlatego oś
+   czasu jest WYKRYWANA (_time_axis), a nie zakładana.
 
 2. `rotw` bywa śmieciem (w jednym z plików ma stałą wartość 246), więc
-   czwarta składowa kwaternionu jest LICZONA z pozostałych trzech —
-   dokładnie tak, jak robi to Android dla TYPE_ROTATION_VECTOR:
-   w = sqrt(1 - x² - y² - z²). Kolumna `rotw` jest brana tylko wtedy,
-   gdy sama z siebie domyka kwaternion do długości 1.
+   czwarta składowa kwaternionu bywa odtwarzana z pozostałych trzech.
+   Androidowe w = sqrt(1 - x² - y² - z²) jest jednak prawdziwe TYLKO do
+   180° obrotu — powyżej daje obrót odwrotny, a granicę widać w danych
+   z zegarka regularnie. Znak w odtwarza więc _quat_w z kinematyki,
+   a gałąź rozwiązania wybiera pion z akcelerometru.
 
 3. Rotation vector przychodzi wolniej niż akcelerometr i jest w pliku
-   POWTÓRZONY między aktualizacjami (w jednym pliku zmienia się co piąty
-   wiersz). Animacja z takich danych chodzi skokowo, dlatego przetrzymane
-   próbki są interpolowane (_smooth_held).
+   POWTÓRZONY między aktualizacjami. Animacja z takich danych chodzi
+   skokowo, dlatego przetrzymane próbki są wygładzane (_smooth_quat).
 
-4. Pozycji żaden czujnik nie mierzy — powstaje z DWUKROTNEGO CAŁKOWANIA
-   przyspieszenia, a każdy błąd narasta w niej kwadratowo. Stąd cały
-   aparat w _positions: filtr górnoprzepustowy po każdym całkowaniu
-   i zerowanie prędkości w chwilach bezruchu (ZUPT). To działa na
-   ODCINKU DŁUGOŚCI UDERZENIA — i właśnie po to są segmenty. Puszczenie
-   tego na piętnastominutowym nagraniu nie ma sensu i jest blokowane
-   przez MAX_ROWS.
+4. Wektora obrotu NIE WOLNO filtrować składowa po składowej — jego
+   składowe wiąże warunek |q| = 1, o którym filtr nie wie. Dlatego
+   animacja czyta plik SUROWY, a nie wersję z prepared_data, gdzie
+   rotx/roty/rotz przechodzą przez filtr dolnoprzepustowy (a rotw nie).
+   Szczegóły przy views._dataset_raw_path. Gdyby mimo to trafił się
+   zapis z zepsutą orientacją, wyłapuje go porównanie z żyroskopem
+   w build_motion i animacja przechodzi na całkowanie żyroskopu.
 
 UKŁADY WSPÓŁRZĘDNYCH
 --------------------
 Kwaternion obraca wektor Z UKŁADU URZĄDZENIA DO UKŁADU ŚWIATA, gdzie
 oś Z jest pionem (konwencja Androida). Sprawdzenie na danych z zegarka:
-przyspieszenie obrócone do świata ma średnią [0, 0, 9.81] — czyli sama
-grawitacja, tak jak być powinno.
+przyspieszenie obrócone do świata ma średnią [0, 0, 9.81] — czyli samą
+grawitację, tak jak być powinno.
 """
 
 from __future__ import annotations
@@ -71,27 +109,22 @@ ROT = ("rotx", "roty", "rotz")
 LIN = ("linaccx", "linaccy", "linaccz")
 TIME_COLUMNS = ("time", "timestamp")
 
-# Górny limit wierszy w jednym oknie animacji. Nie chodzi o pamięć, tylko
-# o sens: pozycja z podwójnego całkowania rozjeżdża się po kilkunastu
-# sekundach, więc animowanie dziesięciu minut i tak dałoby bzdurę.
-MAX_ROWS = 200_000
-
-# Minimum, żeby cokolwiek dało się scałkować i przefiltrować.
+# Minimum, żeby cokolwiek dało się policzyć i zróżniczkować.
 MIN_ROWS = 8
 
-# Sufit klatek na jedną odpowiedź. Powyżej tego progu wchodzi decymacja
-# (co k-ta próbka), czyli JEDYNE miejsce, w którym z animacji wypadają
-# całe pomiary. Dlatego próg jest wysoki: 6000 klatek to minuta zapisu
-# przy 100 Hz i piętnaście sekund przy 400 Hz, a więc znacznie więcej,
-# niż trwa jakiekolwiek pojedyncze uderzenie. Segment normalnej długości
-# nie dociera tu nigdy i idzie co do próbki. Faktyczny krok wraca
-# w `meta.stride` i interfejs go pokazuje.
-MAX_FRAMES = 6000
+# Górny limit wierszy w jednym oknie animacji. Nie chodzi o pamięć, tylko
+# o sens: model dźwigni opisuje POJEDYNCZY ruch, a nie kwadrans nagrania,
+# w którym łokieć zdążył zmienić położenie kilkaset razy.
+MAX_ROWS = 200_000
 
-# Górny limit klatek na sekundę, gdy wołający nic nie poda. Wyżej niż
-# jakikolwiek realny zapis z zegarka, więc domyślnie NIC nie jest
-# odrzucane — klatka odpowiada próbce jeden do jednego.
-DEFAULT_FPS = 120.0
+# Sufit klatek na jedną odpowiedź. Powyżej wchodzi decymacja (co k-ta
+# próbka) — jedyne miejsce, w którym z animacji wypadają całe pomiary.
+# Segment normalnej długości nie dociera tu nigdy: 4000 klatek to
+# czterdzieści sekund zapisu przy 100 Hz.
+MAX_FRAMES = 4000
+
+# Brak limitu klatek, gdy wołający nic nie poda: klatka = próbka z pliku.
+NO_FPS_LIMIT = 0.0
 
 # Sensowny krok próbkowania w sekundach. Służy do rozpoznania jednostki
 # osi czasu: dobra jednostka to ta, przy której typowy odstęp między
@@ -105,85 +138,55 @@ GAP_DT = 0.25
 
 FALLBACK_FS = 100.0
 
-# ---------- wykrywanie bezruchu dla ZUPT ----------
+# ---------- model dźwigni ----------
 #
-# ZUPT jest JEDYNYM miejscem w całej ścieżce, w którym z prędkości znika
-# ruch, którego czujnik nie odróżnił od dryfu. Wszystko poniżej to jest
-# odpowiedź na jedno pytanie: co konkretnie wolno uznać za bezruch.
+# Okno wygładzania prędkości kątowej i przyspieszenia przed dopasowaniem.
+# Dźwignię wyznacza się z DRUGIEJ pochodnej ruchu, więc wchodzi tu szum
+# czujnika pomnożony przez kwadrat częstotliwości. 30 ms to kompromis:
+# przepuszcza wszystko, co w uderzeniu istotne (poniżej ~15 Hz), a ucina
+# to, co i tak jest szumem kwantyzacji.
+SMOOTH_S = 0.03
+
+# Sufit na długość dźwigni. Powyżej metra nie ma już mowy o ruchu ręki —
+# taki wynik świadczy o tym, że dopasowanie poszło w szum, a nie o długim
+# ramieniu.
 #
-# 1. AKTYWNOŚĆ, NIE WARTOŚĆ CHWILOWA. Poprzednia wersja pytała o samo
-#    |a| w danej próbce, a to jest test, który W ŚRODKU KAŻDEGO GŁADKIEGO
-#    RUCHU daje odpowiedź „stoi”: przyspieszenie przechodzi tam przez
-#    zero — dokładnie wtedy, gdy prędkość jest NAJWIĘKSZA. Przy powolnym
-#    przesunięciu przejście przez zero trwa kilkadziesiąt milisekund,
-#    czyli dłużej niż wymagana seria, więc ZUPT wbijał zero prędkości
-#    w szczyt ruchu i kasował z niego wszystko. Teraz liczy się wartość
-#    SKUTECZNA w oknie STILL_WIN_S: w prawdziwym bezruchu jest mała,
-#    a przy przejściu przez zero duża, bo tuż obok są oba szczyty.
-#
-# 2. PRÓG Z DANYCH, NIE Z TABLICY. Stała liczba musi być kompromisem
-#    między czułym a zaszumionym czujnikiem i w obie strony jest zła:
-#    za wysoka kasuje spokojne przymierzanie, za niska nie znajduje ani
-#    jednego postoju. Bierzemy więc niski kwantyl aktywności w tym
-#    właśnie zakresie i mnożymy przez zapas — próg sam schodzi na
-#    zapisie cichym i sam rośnie na hałaśliwym.
-STILL_QUANTILE = 0.10
-STILL_MARGIN = 1.6
+# Podłogi CELOWO NIE MA. Krótkie ramię to nie jest błąd, tylko obrót
+# nadgarstka wokół siebie samego — ruch drobny, ale prawdziwy. Podłoga
+# rozdmuchiwałaby go do swojej wysokości i zawyżała `path_cm`, czyli
+# kłamała w jedynej liczbie, którą użytkownik odczytuje wprost. Fit,
+# z którego nic nie wyszło, wychwytuje test na zero kilka linijek niżej.
+LEVER_MAX = 0.90
 
-# Twarde widełki na próg wyliczony z danych. Sufity to dawne, hojne
-# stałe — wyżej nie wchodzimy nigdy.
-#
-# Podłogi są bardzo nisko i to jest celowe: mają ratować wyłącznie
-# przypadek zapisu idealnie gładkiego, w którym kwantyl wychodzi
-# dokładnie zerowy i żadna próbka nie przeszłaby testu. Prawdziwy
-# akcelerometr w zegarku szumi na poziomie setnych m/s², więc kwantyl
-# jest tam o rząd–dwa wyższy od podłogi i podłoga nie ma nic do rzeczy.
-# Gdyby postawić ją „na oko” wyżej, stałaby się ukrytym progiem
-# kasującym najdrobniejsze ruchy na czystych zapisach.
-STILL_ACC_MIN, STILL_ACC_MAX = 1e-3, 0.45     # m/s²
-STILL_GYR_MIN, STILL_GYR_MAX = 5e-4, 0.35     # rad/s
+# Regularyzacja Tichonowa jako ułamek śladu macierzy normalnej. Ratuje
+# przypadek obrotu wokół jednej osi, w którym jeden kierunek d nie ma
+# w danych żadnego pokrycia i bez tego wyszedłby z dzielenia przez zero.
+LEVER_RIDGE = 1e-3
 
-# Gdy przy progu z danych nie ma ANI JEDNEGO postoju, próg rośnie
-# potęgami STILL_RELAX aż do sufitu. Bez postoju pozycja odpływa
-# liniowo i tor uderzenia robi się spiralą, więc warto spróbować —
-# ale faktycznie użyty próg wraca w `meta.still_threshold`.
-STILL_RELAX = 1.6
-STILL_STEPS = 8
+# Ile razy prędkość kątowa policzona z rotation vectora może rozminąć się
+# z żyroskopem, zanim uznamy rotation vector za niezdatny i przejdziemy na
+# całkowanie żyroskopu. 1.0 znaczy „błąd wielkości samego sygnału”, czyli
+# przebieg, w którym nie ma już informacji — patrz build_motion.
+ROT_GYRO_MAX = 1.0
 
-# Okno wartości skutecznej i minimalna długość serii — w SEKUNDACH,
-# nie w próbkach. Dawne „pięć próbek” znaczyło 50 ms przy 100 Hz, ale
-# już tylko 12 ms przy 400 Hz, czyli tyle, ile trwa jeden dołek szumu.
-STILL_WIN_S = 0.10
-MIN_STILL_S = 0.05
-MIN_STILL_SAMPLES = 3
+# Poniżej tego dopasowania mówimy wprost, że dźwignia tłumaczy zmierzone
+# przyspieszenie słabo — ruch miał zapewne dużą składową przesunięcia,
+# której z obrotu nie da się odtworzyć.
+LEVER_FIT_WARN = 0.35
 
-# Udział wierszy z NOWĄ wartością rotation vectora, powyżej którego
-# uznajemy, że czujnik nadaje w pełnym tempie i nie ma czego
-# interpolować. Patrz _smooth_held.
-HELD_RATIO = 0.5
-
-# Ile typowych okresów aktualizacji czujnika wolno przykryć jedną
-# interpolacją. Dłuższa przerwa między zmianami wartości to nie jest
-# przetrzymana próbka, tylko orientacja, która NAPRAWDĘ stała w miejscu.
-HELD_SPAN = 2.0
+# ---------- scena ----------
 
 NEUTRAL_COLOR = "#94a3b8"
 
-# Bryła zegarka i osie urządzenia, jako ułamki skali sceny.
-WATCH_FRACTION = 0.12
+# Bryła zegarka i osie urządzenia, jako ułamki boku sceny.
+WATCH_FRACTION = 0.13
 AXIS_FRACTION = 1.7
 # Połowa przekątnej bryły z _watch_geometry: sqrt(0.45² + 0.60² + 0.16²).
 WATCH_RADIUS = 0.77
 
-# Podłoga boku sceny w centymetrach.
-#
-# Sześcian musi mieć JAKIŚ minimalny rozmiar, bo przy ręce stojącej
-# w miejscu inaczej rozciąga sam szum na cały ekran. Ale poprzednie
-# 6 cm było podłogą wyższą niż niejeden prawdziwy ruch nadgarstka:
-# delikatne zagranie mieściło się w kilku pikselach pośrodku pustej
-# sceny i nie było czego oglądać. 1 cm zostawia szum szumem, a ruch
-# rzędu milimetrów robi widocznym — realną skalę i tak podają podziałki
-# osi oraz `meta.span_cm`.
+# Podłoga boku sceny w centymetrach. Sześcian musi mieć jakiś minimalny
+# rozmiar, bo przy ręce stojącej w miejscu inaczej rozciąga sam szum na
+# cały ekran.
 MIN_SPAN_CM = 1.0
 
 # Ile klatek przerwy między sąsiednimi fazami traktujemy jako
@@ -197,17 +200,18 @@ MAX_PHASE_GAP = 3
 #  NARZĘDZIA LICZBOWE
 # ============================================================
 
-def _moving_average(x, win):
+def _boxcar(x, win):
     """Średnia krocząca po osi 0, wyśrodkowana, bez przesuwania fazy.
 
     Liczona z sumy skumulowanej, więc koszt nie zależy od szerokości okna.
-    Brzegi dopełniane odbiciem — dopełnienie krawędzią („edge”) zaniżałoby
-    średnią na końcach i filtr górnoprzepustowy zostawiałby tam garb.
+    Brzegi dopełniane odbiciem — dopełnienie krawędzią zaniżałoby średnią
+    na końcach. Symetria w czasie jest tu istotna: filtr przesuwający fazę
+    widać w animacji od razu jako ruch spóźniony za wykresem.
     """
     n = len(x)
     win = int(win)
     if win < 3 or n < 3:
-        return np.zeros_like(x)
+        return x.copy()
 
     win = min(win, 2 * n - 1)
     if win % 2 == 0:
@@ -224,58 +228,31 @@ def _moving_average(x, win):
     return (c[win:] - c[:-win]) / win
 
 
-def _highpass(x, dt, fc):
-    """Filtr górnoprzepustowy: sygnał minus jego wolna składowa.
+def _derivative(x, t):
+    """Pochodna po czasie na NIERÓWNEJ siatce próbek.
 
-    Zamiast filtru rekurencyjnego (który jest sekwencyjny i przesuwa fazę)
-    odejmujemy średnią kroczącą o oknie 1/fc sekundy. Efekt jest ten sam —
-    znika dryf i stała składowa — a operacja jest wektorowa i symetryczna
-    w czasie, więc nie opóźnia ruchu względem oryginału. Przy animacji
-    przesunięcie fazy widać od razu jako ruch „spóźniony” za wykresem.
+    Czujnik nie próbkuje równo (widzieliśmy odstępy od 7.2 do 12.8 ms przy
+    nominalnych 10 ms), a np.gradient przyjmuje oś czasu wprost, więc
+    nierówność nie zamienia się w fałszywe skoki pochodnej.
     """
-    if fc <= 0:
-        return x - x.mean(axis=0)
-    win = int(round(1.0 / (fc * dt)))
-    if win < 3:
-        return x - x.mean(axis=0)
-    return x - _moving_average(x, win)
+    return np.gradient(x, t, axis=0, edge_order=2)
 
 
-def _cumtrapz(y, dt):
-    """Całka skumulowana metodą trapezów, zaczynając od zera."""
-    out = np.zeros_like(y)
-    np.cumsum(0.5 * (y[1:] + y[:-1]) * dt[:, None], axis=0, out=out[1:])
-    return out
+def _skew(v):
+    """Macierze [v]ₓ dla całej serii wektorów: [v]ₓ·u = v × u."""
+    S = np.zeros((len(v), 3, 3))
+    S[:, 0, 1] = -v[:, 2]
+    S[:, 0, 2] = v[:, 1]
+    S[:, 1, 0] = v[:, 2]
+    S[:, 1, 2] = -v[:, 0]
+    S[:, 2, 0] = -v[:, 1]
+    S[:, 2, 1] = v[:, 0]
+    return S
 
 
-def _runs_at_least(mask, min_len, erode=0):
-    """Zostawia w masce tylko serie długości co najmniej min_len.
-
-    `erode` skraca każdą zachowaną serię o tyle próbek z obu stron.
-    Maska bezruchu powstaje z wielkości liczonej w oknie, więc jest
-    o pół okna ROZMYTA w obie strony i sięga w początek ruchu. Bez
-    skrócenia ZUPT wbijałby zero prędkości w pierwsze próbki ruszania
-    z miejsca — czyli dokładnie tam, gdzie zaczyna się to, co chcemy
-    zobaczyć.
-    """
-    if not mask.any():
-        return mask
-    padded = np.concatenate([[False], mask, [False]])
-    edges = np.diff(padded.astype(np.int8))
-    starts = np.nonzero(edges == 1)[0]
-    ends = np.nonzero(edges == -1)[0]
-
-    out = np.zeros_like(mask)
-    for s, e in zip(starts, ends):
-        if e - s < min_len:
-            continue
-        s, e = s + erode, e - erode
-        if e > s:
-            out[s:e] = True
-    return out
-
-
-# ---------- kwaterniony (w, x, y, z) ----------
+# ============================================================
+#  KWATERNIONY (w, x, y, z)
+# ============================================================
 
 def _quat_normalize(q):
     n = np.linalg.norm(q, axis=1, keepdims=True)
@@ -304,9 +281,9 @@ def _to_world(R, v):
 
 
 def _quat_align_signs(q):
-    """Usuwa przeskoki znaku. q i -q to ten sam obrót, ale interpolacja
-    między nimi przelatuje przez pół sfery — na animacji wygląda to jak
-    gwałtowny obrót o 180°, którego w danych nie ma."""
+    """Usuwa przeskoki znaku. q i -q to ten sam obrót, ale różniczkowanie
+    i wygładzanie między nimi przelatuje przez pół sfery — na animacji
+    wygląda to jak obrót o 180°, którego w danych nie ma."""
     dots = np.sum(q[1:] * q[:-1], axis=1)
     signs = np.cumprod(np.where(dots < 0, -1.0, 1.0))
     q = q.copy()
@@ -314,87 +291,181 @@ def _quat_align_signs(q):
     return q
 
 
-def _quat_from_rotvec(rv, rw=None):
-    """Kwaternion z trzech składowych ROTATION_VECTOR.
+def _quat_w(rv, absw, dt, gyr, znak0):
+    """Czwarta składowa kwaternionu RAZEM ZE ZNAKIEM.
 
-    Czwarta składowa jest liczona jako sqrt(1 - |v|²) — tak definiuje ją
-    Android. Kolumna `rotw` bywa w plikach zapisana błędnie (stała wartość
-    niebędąca żadnym kosinusem), więc jest brana pod uwagę tylko wtedy, gdy
-    faktycznie domyka kwaternion do długości 1.
+    ROTATION_VECTOR niesie tylko trzy składowe, a Android liczy czwartą
+    jako w = +sqrt(1 - |v|²). To jest prawdą TYLKO dla obrotów do 180°:
+    w = cos(θ/2), więc powyżej tego kąta prawdziwe w jest UJEMNE, a
+    dodatni pierwiastek daje obrót ODWROTNY do rzeczywistego.
+
+    I nie jest to przypadek egzotyczny. Kwaternion opisuje obrót
+    urządzenie → świat, a świat to układ ENU — nadgarstek nad stołem
+    bywa względem niego obrócony o więcej niż 180° i przekracza tę
+    granicę w ŚRODKU ruchu. Orientacja przeskakuje wtedy na odwrotną
+    i z powrotem, czyli zegarek na animacji wariuje — tym częściej, im
+    szybszy ruch, bo tym więcej razy granica zostaje przekroczona.
+
+    ZNAKU NIE DA SIĘ WYBRAĆ PO SĄSIEDZTWIE
+    --------------------------------------
+    Kuszące jest wziąć tego z dwóch kandydatów (±|w|, v), który leży
+    bliżej poprzedniego obrotu. Tyle że dokładnie w punkcie przejścia
+    |w| = 0 i OBAJ kandydaci są tam identyczni — różnica między nimi
+    jest rzędu |w|, czyli znika w tym samym miejscu, w którym trzeba
+    podjąć decyzję. Test bliskości nie przełącza więc znaku nigdy
+    i przejście przez 180° zostaje niezauważone.
+
+    Znak trzeba PRZEWIDZIEĆ, a nie wybrać. Z kinematyki kwaternionu
+
+        ẇ = -½ · v · ω
+
+    czyli żyroskop mówi wprost, w którą stronę w zmierza — także wtedy,
+    gdy właśnie przechodzi przez zero. Wystarczy jeden krok Eulera od
+    poprzedniej, już ustalonej wartości: wielkość |w| bierzemy z danych,
+    a z przewidywania tylko ZNAK, więc nic się tu nie całkuje i nic nie
+    dryfuje. Bez żyroskopu zostaje ekstrapolacja liniowa po dwóch
+    poprzednich próbkach, która przez zero przechodzi tak samo.
+
+    ZNAK PIERWSZEJ PRÓBKI JEST PARAMETREM, NIE ZAŁOŻENIEM
+    -----------------------------------------------------
+    Śledzenie jest poprawne tylko wtedy, gdy startuje z dobrego znaku.
+    Przy złym starcie nachylenie z żyroskopu jest nadal prawdziwe, ale
+    odnosi się do drugiej gałęzi rozwiązania — przejścia przez zero
+    wypadają wtedy w złych miejscach i seria wychodzi POMIESZANA, a nie
+    po prostu odwrócona. Takiego wyniku nie da się już naprawić żadnym
+    globalnym odwróceniem. Dlatego `znak0` wchodzi tu z zewnątrz:
+    _quat_from_rotvec liczy obie gałęzie i wybiera po pionie.
     """
-    n2 = np.clip((rv * rv).sum(axis=1), 0.0, 1.0)
-    w = np.sqrt(1.0 - n2)
+    n = len(rv)
+    w = np.empty(n)
+    w[0] = znak0 * absw[0]
 
-    if rw is not None:
-        domyka = np.abs(np.sqrt(n2 + rw * rw) - 1.0) < 0.05
-        if np.mean(domyka) > 0.9:
-            w = rw
+    for i in range(1, n):
+        if gyr is not None:
+            pred = w[i - 1] - 0.5 * float(rv[i - 1] @ gyr[i - 1]) * dt[i - 1]
+        elif i >= 2:
+            pred = 2.0 * w[i - 1] - w[i - 2]
+        else:
+            pred = w[i - 1]
+        w[i] = absw[i] if pred >= 0.0 else -absw[i]
 
-    return _quat_align_signs(_quat_normalize(np.column_stack([w, rv])))
+    return w
 
 
-def _smooth_held(q, t):
-    """Interpoluje kwaterniony powtórzone między aktualizacjami czujnika.
+def _pion_w_swiecie(q, acc):
+    """Średnia pionowa składowa przyspieszenia obróconego do świata.
 
-    Rotation vector w części plików aktualizuje się wolniej niż
-    akcelerometr, a w CSV każdy wiersz ma jakąś wartość — po prostu tę
-    samą, aż przyjdzie nowa. Bez interpolacji animacja co kilka klatek
-    stoi i przeskakuje.
-
-    UWAGA: to jedyne miejsce, w którym DOKŁADAMY ruch, którego czujnik nie
-    zmierzył. Dlatego zwraca też informację, czy w ogóle coś zrobiło —
-    interfejs ma o tym powiedzieć wprost, a `smooth=0` w zapytaniu wyłącza
-    to całkowicie, jeśli ktoś woli zobaczyć surowe schodki.
-
-    Interpolacja liniowa po składowych z ponowną normalizacją (nlerp) —
-    przy kroku poniżej ~20° różni się od slerp o ułamek procenta, a jest
-    w całości wektorowa.
+    Miara poprawności orientacji. Przy dobrej orientacji przyspieszenie
+    obrócone do układu świata to średnio sama grawitacja skierowana
+    w GÓRĘ, czyli [0, 0, +G] — ruch nadgarstka w oknie uderzenia zaczyna
+    się i kończy w spoczynku, więc jego własne przyspieszenie ma średnią
+    bliską zeru i zostaje tylko grawitacja. Przy orientacji błędnej nie
+    ma powodu, żeby akurat tak wyszło.
     """
-    zmiany = np.any(np.abs(np.diff(q, axis=0)) > 1e-9, axis=1)
-    idx = np.concatenate([[0], np.nonzero(zmiany)[0] + 1])
+    R = _quat_matrices(_quat_normalize(q))
+    return float(np.einsum("nj,nj->n", R[:, 2, :], acc).mean())
 
-    # Mniej niż trzy punkty — nie ma czego interpolować.
-    #
-    # Powyżej progu HELD_RATIO wierszy z nową wartością uznajemy, że
-    # czujnik nadaje w pełnym tempie i każda klatka jest pomiarem.
-    # Próg jest nisko (połowa), bo interpolacja ZASTĘPUJE zmierzone
-    # wartości rampą — przy 80%, jak było wcześniej, wystarczyło, żeby
-    # co piąta próbka powtórzyła się przez samo zaokrąglenie drobnego
-    # ruchu, i cały zapis szedł przez wygładzanie, którego nie
-    # potrzebował. Interpolujemy dopiero wtedy, gdy przetrzymywanie
-    # próbek jest ewidentne, a nie „możliwe”.
-    if len(idx) < 3 or len(idx) > HELD_RATIO * len(q):
+
+def _quat_from_rotvec(rv, dt, rw=None, acc=None, gyr=None):
+    """Kwaternion z ROTATION_VECTOR, razem ze znakiem czwartej składowej.
+
+    Kolumna `rotw` niesie ten znak wprost, więc gdy jest wiarygodna,
+    wygrywa ze wszystkim. Bywa jednak zapisana błędnie (w jednym z plików
+    ma stałą wartość 246), a w wersji PRZYGOTOWANEJ pliku bywa niespójna
+    z rot* z innego powodu: transform_raw_df filtruje rotx/roty/rotz
+    dolnoprzepustowo, a rotw zostawia nietknięte. Dlatego bierzemy ją
+    tylko wtedy, gdy faktycznie domyka kwaternion do długości 1.
+
+    Bez wiarygodnego rotw znak czwartej składowej odtwarza _quat_w, ale
+    ten potrzebuje znaku PIERWSZEJ próbki, którego z samych rot* nie da
+    się odczytać. Liczymy więc obie gałęzie rozwiązania i wybieramy tę,
+    w której grawitacja wychodzi w górę (_pion_w_swiecie). Wyboru nie da
+    się odłożyć na potem: gałęzie różnią się nie tylko globalnym znakiem,
+    ale i miejscami przejść przez zero.
+
+    Zwraca (kwaterniony, opis pochodzenia czwartej składowej).
+    """
+    n2 = (rv * rv).sum(axis=1)
+
+    # |v| > 1 jest fizycznie niemożliwe (|v| = |sin(θ/2)|), więc taka
+    # próbka znaczy, że wektor obrotu został po drodze zniekształcony —
+    # np. przez filtr dolnoprzepustowy, który przestrzeliwuje na zboczu.
+    # Przycięcie samego n2 dawałoby w tych miejscach w = 0, czyli obrót
+    # o równe 180° wzięty znikąd; skalujemy więc CAŁY wektor z powrotem
+    # na sferę, co zachowuje przynajmniej oś obrotu.
+    zepsute = n2 > 1.0
+    if zepsute.any():
+        rv = rv.copy()
+        rv[zepsute] /= np.sqrt(n2[zepsute])[:, None]
+        n2 = np.minimum(n2, 1.0)
+
+    absw = np.sqrt(np.maximum(1.0 - n2, 0.0))
+
+    if rw is not None and np.mean(np.abs(np.sqrt(n2 + rw * rw) - 1.0) < 0.05) > 0.9:
+        q = np.column_stack([rw, rv])
+        opis = "rotw z pliku"
+    else:
+        galezie = [np.column_stack([_quat_w(rv, absw, dt, gyr, s), rv])
+                   for s in (1.0, -1.0)]
+        if acc is None:
+            # Nie ma czym rozstrzygnąć — zostaje założenie Androida (w > 0).
+            q = galezie[0]
+            opis = "znak w z kinematyki, bez potwierdzenia pionem"
+        else:
+            q = max(galezie, key=lambda kandydat: _pion_w_swiecie(kandydat, acc))
+            opis = "znak w z kinematyki, gałąź wybrana wg pionu"
+
+    if zepsute.any():
+        opis += f", {int(zepsute.sum())} próbek poza sferą jednostkową"
+
+    return _quat_align_signs(_quat_normalize(q)), opis
+
+
+def _smooth_quat(q):
+    """Wygładza schodki rotation vectora przetrzymywanego między pomiarami.
+
+    W części plików rotation vector aktualizuje się wolniej niż
+    akcelerometr, a w CSV każdy wiersz i tak ma jakąś wartość — po prostu
+    tę samą, aż przyjdzie nowa. Bez wygładzenia animacja co kilka klatek
+    stoi i przeskakuje, a prędkość kątowa liczona z takiej serii to grzebień
+    igieł zamiast gładkiego przebiegu.
+
+    Zabieg to zwykła średnia krocząca o oknie równym okresowi aktualizacji
+    czujnika. Na schodkach o takim właśnie kroku daje dokładnie rampę
+    liniową między pomiarami, czyli to samo, co interpolacja — tyle że bez
+    szukania węzłów i bez ryzyka rozciągnięcia jednej zmiany na całą
+    poprzedzającą ją chwilę bezruchu. Tam, gdzie wartość stoi naprawdę,
+    średnia ze stałej jest tą samą stałą.
+
+    Zwraca (kwaterniony, czy cokolwiek zrobiono) — interfejs ma powiedzieć
+    wprost, kiedy ogląda się wygładzenie, a kiedy surowy pomiar.
+    """
+    zmiany = np.nonzero(np.any(np.abs(np.diff(q, axis=0)) > 1e-9, axis=1))[0]
+    if len(zmiany) < 2:
         return q, False
 
-    # Nie każda przerwa między zmianami jest przetrzymaną próbką.
-    #
-    # Gdy nadgarstek stoi, rotation vector NIE ZMIENIA SIĘ, bo nie ma
-    # czego mierzyć — i wygląda to w pliku dokładnie tak samo jak
-    # przetrzymanie. Interpolacja przez taką przerwę rozciąga początek
-    # obrotu wstecz na całą poprzedzającą go chwilę bezruchu: animacja
-    # pokazuje wtedy powolny obrót w momencie, w którym ręka jeszcze
-    # stała. Dlatego mostkujemy tylko przerwy porównywalne z typowym
-    # okresem aktualizacji; w dłuższych wstawiamy węzeł HELD_SPAN
-    # okresów przed zmianą, więc wartość jest TRZYMANA aż do chwili,
-    # w której czujnik mógł ją realnie zaktualizować.
-    okres = max(1, int(np.median(np.diff(idx))))
-    limit = max(2, int(round(okres * HELD_SPAN)))
+    okres = int(round(float(np.median(np.diff(zmiany)))))
+    if okres < 2:
+        return q, False             # czujnik nadaje w pełnym tempie
 
-    przytrzymania = [i1 - limit for i0, i1 in zip(idx[:-1], idx[1:])
-                     if i1 - i0 > limit]
-    if przytrzymania:
-        idx = np.union1d(idx, np.asarray(przytrzymania, dtype=idx.dtype))
+    return _quat_normalize(_boxcar(q, max(3, okres))), True
 
-    # Po wstawieniu węzłów może się okazać, że nie ma już czego
-    # interpolować — same sąsiadujące próbki. Wtedy oddajemy oryginał
-    # i mówimy wprost, że nic nie dokładaliśmy.
-    if not np.any(np.diff(idx) > 1):
-        return q, False
 
-    out = np.empty_like(q)
-    for k in range(4):
-        out[:, k] = np.interp(t, t[idx], q[idx, k])
-    return _quat_normalize(out), True
+def _quat_angular_velocity(q, t):
+    """Prędkość kątowa w układzie URZĄDZENIA, wyliczona z serii kwaternionów.
+
+    ω = 2 · część_wektorowa(q⁻¹ ⊗ q̇). Ścieżka dla plików bez żyroskopu —
+    gdy jest, bierzemy jego pomiar, bo jest gęstszy i mniej zaszumiony niż
+    pochodna orientacji.
+    """
+    dq = _derivative(q, t)
+    w, x, y, z = q[:, 0], q[:, 1], q[:, 2], q[:, 3]
+    dw, dx, dy, dz = dq[:, 0], dq[:, 1], dq[:, 2], dq[:, 3]
+    return 2.0 * np.column_stack([
+        w * dx - x * dw - y * dz + z * dy,
+        w * dy + x * dz - y * dw - z * dx,
+        w * dz - x * dy + y * dx - z * dw,
+    ])
 
 
 def _integrate_gyro(gyr, dt, acc=None):
@@ -554,7 +625,7 @@ def prepare(path: Path):
     """Wczytuje CSV i wystawia surowe serie w jednostkach SI.
 
     Świadomie NIE liczy tu orientacji ani pozycji: jedno i drugie zależy
-    od wybranego zakresu (filtry i całkowanie liczą się od jego początku),
+    od wybranego zakresu (dźwignia dopasowuje się do konkretnego ruchu),
     a plik potrafi mieć kilkadziesiąt tysięcy wierszy, z których obejrzy
     się dwa uderzenia. Rachunki idą w build_motion, na wycinku.
     """
@@ -620,151 +691,79 @@ def describe(prep):
 
 
 # ============================================================
-#  POZYCJA
+#  POZYCJA — MODEL DŹWIGNI
 # ============================================================
 
-def _activity(x, win):
-    """Wartość skuteczna (RMS) długości wektora w oknie `win` próbek.
+def _lever_fit(R, omega, domega, a_world):
+    """Wektor od osi obrotu do zegarka, wyznaczony z przyspieszenia.
 
-    To jest miara AKTYWNOŚCI, a nie chwilowej wartości: rośnie zarówno
-    od stałego wychylenia, jak i od wahań wokół zera. Dzięki temu
-    odróżnia prawdziwy bezruch od przejścia przyspieszenia przez zero
-    w środku ruchu, gdzie chwilowa wartość też jest mała, ale tuż obok
-    stoją oba szczyty.
+    Dla punktu sztywno związanego z obracającym się ciałem, w odległości
+    d od nieruchomej osi obrotu (d w układzie ciała):
+
+        p = R·d
+        v = ṗ = R·[ω]ₓ·d
+        a = v̇ = R·( [ω̇]ₓ + [ω]ₓ[ω]ₓ )·d
+
+    Pierwszy człon to przyspieszenie styczne, drugi dośrodkowe. Całość
+    jest LINIOWA względem d, więc M(t)·d = a(t) to zwykły przesztywniony
+    układ równań: trzy niewiadome na 3·N równań. Rozwiązanie metodą
+    najmniejszych kwadratów uśrednia szum zamiast go całkować — i to jest
+    cała różnica względem podwójnego całkowania przyspieszenia.
+
+    Zwraca (d, jakość), gdzie jakość ∈ [0, 1] to udział zmierzonego
+    przyspieszenia wytłumaczony przez tę dźwignię. Blisko jedynki: ruch
+    był obrotem wokół w miarę nieruchomego punktu, czyli dokładnie tym,
+    czego oczekujemy po uderzeniu. Blisko zera: dominowało przesunięcie
+    całego ramienia, którego z samego obrotu nie da się odtworzyć.
     """
-    kwadraty = (x * x).sum(axis=1)[:, None]
-    return np.sqrt(np.maximum(_moving_average(kwadraty, max(3, win))[:, 0], 0.0))
+    W = _skew(omega)
+    M = R @ (_skew(domega) + W @ W)
 
+    A = np.einsum("nij,nik->jk", M, M)
+    b = np.einsum("nij,ni->j", M, a_world)
 
-def _still_threshold(akt, kwantyl_margines, lo, hi):
-    """Próg bezruchu wyliczony z rozkładu aktywności w tym zakresie."""
-    if len(akt) == 0:
-        return lo
-    return float(np.clip(np.quantile(akt, STILL_QUANTILE) * kwantyl_margines,
-                         lo, hi))
+    slad = float(np.trace(A))
+    if not math.isfinite(slad) or slad <= 0:
+        return np.zeros(3), 0.0
 
+    try:
+        d = np.linalg.solve(A + (LEVER_RIDGE * slad / 3.0) * np.eye(3), b)
+    except np.linalg.LinAlgError:
+        return np.zeros(3), 0.0
 
-def _zupt(v, a, gyr, win, min_len):
-    """Zerowanie prędkości w chwilach bezruchu (Zero-velocity UPdaTe).
+    dlugosc = float(np.linalg.norm(d))
+    if not math.isfinite(dlugosc) or dlugosc < 1e-9:
+        return np.zeros(3), 0.0
 
-    Jeśli w oknie są momenty, w których ręka faktycznie stoi — a przy
-    uderzeniu w bilardzie są, bo przymierzanie to seria zatrzymań — to
-    prędkość policzona z całkowania musi w nich wynosić zero. Cokolwiek
-    tam wyszło, jest dryfem. Interpolujemy ten dryf między kolejnymi
-    zatrzymaniami i odejmujemy.
+    # Absurdalnie długie ramię znaczy, że dopasowanie poszło w szum, ale
+    # jego KIERUNEK zwykle zostaje sensowny — przycinamy więc samą
+    # długość, zamiast rezygnować z pozycji w całości.
+    if dlugosc > LEVER_MAX:
+        d = d * (LEVER_MAX / dlugosc)
 
-    To jest najskuteczniejszy pojedynczy zabieg na całej ścieżce: bez
-    niego pozycja odpływa liniowo i tor uderzenia wygląda jak spirala.
+    # Jakość liczona z PRZYCIĘTEGO d, czyli z tego, co naprawdę zobaczy
+    # użytkownik — nie z rozwiązania, które odrzuciliśmy.
+    reszta = float(((M @ d - a_world) ** 2).sum())
+    calosc = float((a_world ** 2).sum())
+    jakosc = 1.0 - reszta / calosc if calosc > 0 else 0.0
 
-    PRÓG DOBIERA SIĘ DO ZAPISU, A NIE ODWROTNIE
-    -------------------------------------------
-    Próg jest tu wprost pokrętłem „ile prawdziwego wolnego ruchu
-    skasować”: wszystko, co pod niego wpadnie, dostaje prędkość zero,
-    nawet jeśli ręka naprawdę się przesuwała. Dlatego nie jest stałą,
-    tylko wynika z rozkładu aktywności w TYM zakresie — zaczyna od
-    najcichszych dziesięciu procent i rozluźnia się dopiero wtedy, gdy
-    przy takim progu nie ma ani jednego postoju.
-
-    Zwraca (prędkość, liczba próbek bezruchu, użyte progi albo None).
-    None znaczy: nie znaleziono bezruchu nawet przy najluźniejszym progu,
-    prędkość wraca nietknięta i dryfem musi zająć się filtr.
-    """
-    akt_a = _activity(a, win)
-    akt_g = _activity(gyr, win) if gyr is not None else None
-
-    margines = STILL_MARGIN
-    stoi = None
-    wezly = np.empty(0, dtype=np.int64)
-    prog_a = prog_g = 0.0
-
-    for _ in range(STILL_STEPS):
-        prog_a = _still_threshold(akt_a, margines, STILL_ACC_MIN, STILL_ACC_MAX)
-        stoi = akt_a < prog_a
-        if akt_g is not None:
-            prog_g = _still_threshold(akt_g, margines, STILL_GYR_MIN, STILL_GYR_MAX)
-            stoi = stoi & (akt_g < prog_g)
-
-        stoi = _runs_at_least(stoi, min_len, erode=win // 2)
-        wezly = np.nonzero(stoi)[0]
-        if len(wezly) >= 2:
-            break
-        if prog_a >= STILL_ACC_MAX and (akt_g is None or prog_g >= STILL_GYR_MAX):
-            break
-        margines *= STILL_RELAX
-
-    if len(wezly) < 2:
-        return v, 0, None
-
-    osie = np.arange(len(v), dtype=np.float64)
-    dryf = np.empty_like(v)
-    for k in range(3):
-        dryf[:, k] = np.interp(osie, wezly, v[wezly, k])
-    return v - dryf, int(stoi.sum()), (prog_a, prog_g if akt_g is not None else None)
-
-
-def _positions(a_world, gyr, dt, hp_hz, zupt):
-    """Przyspieszenie w układzie świata → prędkość → pozycja.
-
-    Całkowanie zamienia każdą resztkową stałą składową w rampę: stały
-    błąd przyspieszenia 0.05 m/s² (a tyle daje błąd orientacji rzędu
-    0.3°) to po dwóch sekundach 10 cm odpłynięcia. Trzeba więc coś z tym
-    zrobić — pytanie tylko, CZYM.
-
-    DRYF ZDEJMUJE SIĘ RAZ, NIE TRZY RAZY
-    ------------------------------------
-    Wcześniej prędkość przechodziła i przez filtr górnoprzepustowy,
-    i przez ZUPT, a potem to samo dostawała jeszcze pozycja. Te zabiegi
-    nie sumują się w „lepiej”: ZUPT opiera się na chwilach, w których
-    prędkość NAPRAWDĘ była zerowa, i po nim rampy już nie ma, więc drugi,
-    ślepy filtr na tym samym sygnale zabierał tylko kawałek prawdziwego
-    wolnego ruchu. Teraz:
-
-      • ZUPT znalazł postoje → filtr na prędkości NIE wchodzi wcale,
-        a ten na pozycji jest o oktawę łagodniejszy (zostaje jako
-        zabezpieczenie przed resztką, nie jako główny mechanizm);
-      • ZUPT nie znalazł nic → wracamy do ślepego detrendu na obu
-        etapach, bo bez niego pozycja odpłynie. To jest gorsza droga
-        i dlatego wraca w `meta` — użytkownik ma wiedzieć, że oglądał
-        rekonstrukcję bez punktu zaczepienia.
-
-    Filtr górnoprzepustowy jest tu ODEJMOWANIEM średniej kroczącej, więc
-    NIE tłumi wysokich częstotliwości — drobny, szybki ruch przechodzi
-    przez niego nietknięty. Ubywa wyłącznie tego, co wolniejsze od hp_hz.
-    """
-    krok = float(np.median(dt))
-
-    def probki(sekundy, minimum):
-        return max(minimum, int(round(sekundy / krok))) if krok > 0 else minimum
-
-    a = _highpass(a_world, krok, hp_hz)
-    v = _cumtrapz(a, dt)
-
-    postoje, progi = 0, None
-    if zupt:
-        v, postoje, progi = _zupt(
-            v, a, gyr,
-            probki(STILL_WIN_S, MIN_STILL_SAMPLES),
-            probki(MIN_STILL_S, MIN_STILL_SAMPLES),
-        )
-
-    if progi is None:
-        v = _highpass(v, krok, hp_hz)
-        hp_pos = hp_hz
-    else:
-        hp_pos = hp_hz * 0.5
-
-    p = _cumtrapz(v, dt)
-    p = _highpass(p, krok, hp_pos)
-
-    return p, v, postoje, progi
+    return d, float(np.clip(jakosc, 0.0, 1.0))
 
 
 # ============================================================
 #  SCENA
 # ============================================================
 
+# Kolory ścian bryły zegarka. Tarcza jest jasna, spód ciemny, boki
+# pośrednie — dzięki temu widać ORIENTACJĘ samej bryły, nawet gdy osie
+# urządzenia patrzą prosto w kamerę i skracają się do punktu.
+WATCH_TOP = "#e2e8f0"
+WATCH_SIDE = "#475569"
+WATCH_BOTTOM = "#1e293b"
+
+
 def _watch_geometry(rozmiar):
-    """Bryła zegarka w układzie URZĄDZENIA plus trójkąty ścian.
+    """Bryła zegarka w układzie URZĄDZENIA: wierzchołki, trójkąty, kolory.
 
     `rozmiar` jest w tych samych jednostkach, w których rysuje się scena
     (centymetry) — wierzchołki wychodzą stąd gotowe do dodania do pozycji.
@@ -787,21 +786,21 @@ def _watch_geometry(rozmiar):
         (0, 3, 7), (0, 7, 4),      # bok -X
         (1, 5, 6), (1, 6, 2),      # bok +X
     ]
-    return verts, faces
+    kolory = ([WATCH_BOTTOM] * 2 + [WATCH_TOP] * 2 + [WATCH_SIDE] * 8)
+    return verts, faces, kolory
 
 
 def _phase_spans(phases, t_probek, lo, hi, t_klatek):
     """Zakresy faz przeliczone z numerów wierszy CSV na numery klatek.
 
     Fazy w bazie są opisane numerami wierszy, bo taka jest oś X wykresu
-    2D. Animacja ma własny, równomierny raster klatek, więc przejście
-    prowadzi przez CZAS: numer wiersza → sekunda → numer klatki. Gdyby
-    przeliczać wprost proporcją numerów, kolory rozjechałyby się wszędzie
-    tam, gdzie próbkowanie nie jest idealnie równe — a nie jest.
+    2D. Animacja ma własny raster klatek, więc przejście prowadzi przez
+    CZAS: numer wiersza → sekunda → numer klatki. Gdyby przeliczać wprost
+    proporcją numerów, kolory rozjechałyby się wszędzie tam, gdzie
+    próbkowanie nie jest idealnie równe — a nie jest.
     """
     out = []
-    for faza in phases:
-        klucz, etykieta, kolor, start, koniec = faza
+    for klucz, etykieta, kolor, start, koniec in phases:
         start = max(int(start), lo)
         koniec = min(int(koniec), hi)
         if koniec <= start:
@@ -827,57 +826,52 @@ def _phase_spans(phases, t_probek, lo, hi, t_klatek):
 
     out.sort(key=lambda s: s["i0"])
 
-    # Domknięcie mikroszczelin między fazami.
-    #
-    # Fazy zaznacza się przeciągnięciem po wykresie, więc koniec jednej
-    # i początek następnej rzadko wypadają na tym samym wierszu — zostaje
-    # między nimi kilka próbek niczyich. Na wykresie 2D to niewidoczne,
+    # Domknięcie mikroszczelin między fazami. Fazy zaznacza się
+    # przeciągnięciem po wykresie, więc koniec jednej i początek następnej
+    # rzadko wypadają na tym samym wierszu. Na wykresie 2D to niewidoczne,
     # ale w animacji podświetlenie gaśnie wtedy na jedną klatkę i wygląda
-    # to jak usterka. Zszywamy przerwy do MAX_PHASE_GAP klatek; szersze
-    # zostają, bo taka dziura to już świadoma decyzja, a nie niedokładność
-    # przeciągnięcia myszą.
+    # to jak usterka. Szersze dziury zostają — taka przerwa to już
+    # świadoma decyzja, a nie niedokładność przeciągnięcia myszą.
     for wczesniejszy, pozniejszy in zip(out, out[1:]):
         szczelina = pozniejszy["i0"] - wczesniejszy["i1"]
         if 1 < szczelina <= MAX_PHASE_GAP + 1:
             pozniejszy["i0"] = wczesniejszy["i1"] + 1
 
-
     return out
 
 
-def _build_figure(pos_cm, zakres, watch_color="#1d4ed8"):
+def _build_figure(pos_cm, zakres, kolory_zegarka):
     """Scena Plotly: ślady statyczne (tor) plus ślady odświeżane co klatkę.
 
     CAŁY tor jest szary i cienki — to tło, kontekst całego zaznaczonego
-    ruchu. Kolorem podświetla się wyłącznie faza, która akurat trwa, i to
-    robi już przeglądarka na śladzie `phase`. Malowanie wszystkich faz
-    naraz dawało tęczę, w której nie było widać, gdzie w tej chwili jest
-    ręka — a o to w animacji chodzi.
+    ruchu. Kolorem podświetla się wyłącznie faza, która akurat trwa.
+    Malowanie wszystkich faz naraz dawało tęczę, w której nie było widać,
+    gdzie w tej chwili jest ręka — a o to w animacji chodzi.
 
     Kolejność śladów jest częścią kontraktu z motion3d.js — indeksy
     dynamicznych wracają w payload["dynamic"], żeby przeglądarka nie
     musiała ich zgadywać ani szukać po nazwie.
     """
-    data = []
+    def seria(v):
+        return [round(float(c), 3) for c in v]
 
-    # --- statyczne ---
-    data.append({
-        "type": "scatter3d", "mode": "lines", "name": "rzut na podłogę",
-        "x": [round(v, 3) for v in pos_cm[:, 0]],
-        "y": [round(v, 3) for v in pos_cm[:, 1]],
-        "z": [round(zakres["z"][0], 3)] * len(pos_cm),
-        "line": {"color": "rgba(148,163,184,0.30)", "width": 1},
-        "hoverinfo": "skip", "showlegend": False,
-    })
-
-    data.append({
-        "type": "scatter3d", "mode": "lines", "name": "tor ruchu",
-        "x": [round(v, 3) for v in pos_cm[:, 0]],
-        "y": [round(v, 3) for v in pos_cm[:, 1]],
-        "z": [round(v, 3) for v in pos_cm[:, 2]],
-        "line": {"color": NEUTRAL_COLOR, "width": 2},
-        "hoverinfo": "skip", "showlegend": False,
-    })
+    data = [
+        # Rzut toru na podłogę sceny. Bez niego oko nie ma jak ocenić
+        # głębokości i każdy łuk wygląda na płaski.
+        {
+            "type": "scatter3d", "mode": "lines", "name": "rzut na podłogę",
+            "x": seria(pos_cm[:, 0]), "y": seria(pos_cm[:, 1]),
+            "z": [round(zakres["z"][0], 3)] * len(pos_cm),
+            "line": {"color": "rgba(148,163,184,0.22)", "width": 2},
+            "hoverinfo": "skip", "showlegend": False,
+        },
+        {
+            "type": "scatter3d", "mode": "lines", "name": "tor ruchu",
+            "x": seria(pos_cm[:, 0]), "y": seria(pos_cm[:, 1]), "z": seria(pos_cm[:, 2]),
+            "line": {"color": "rgba(148,163,184,0.55)", "width": 3},
+            "hoverinfo": "skip", "showlegend": False,
+        },
+    ]
 
     dynamiczne = {}
 
@@ -887,7 +881,7 @@ def _build_figure(pos_cm, zakres, watch_color="#1d4ed8"):
     data.append({
         "type": "scatter3d", "mode": "lines", "name": "bieżąca faza",
         "x": [], "y": [], "z": [],
-        "line": {"color": NEUTRAL_COLOR, "width": 6},
+        "line": {"color": NEUTRAL_COLOR, "width": 7},
         "hoverinfo": "skip", "showlegend": False,
     })
 
@@ -895,7 +889,7 @@ def _build_figure(pos_cm, zakres, watch_color="#1d4ed8"):
     data.append({
         "type": "scatter3d", "mode": "lines", "name": "ostatnia chwila",
         "x": [], "y": [], "z": [],
-        "line": {"color": "#0f172a", "width": 8},
+        "line": {"color": "#38bdf8", "width": 6},
         "hoverinfo": "skip", "showlegend": False,
     })
 
@@ -903,45 +897,49 @@ def _build_figure(pos_cm, zakres, watch_color="#1d4ed8"):
     data.append({
         "type": "mesh3d", "name": "zegarek",
         "x": [], "y": [], "z": [], "i": [], "j": [], "k": [],
-        "color": watch_color, "opacity": 0.85, "flatshading": True,
+        "facecolor": kolory_zegarka,
+        "flatshading": True,
+        "lighting": {"ambient": 0.62, "diffuse": 0.85, "specular": 0.18,
+                     "roughness": 0.45, "fresnel": 0.1},
+        "lightposition": {"x": 100, "y": 200, "z": 300},
         "hoverinfo": "skip", "showlegend": False,
     })
 
     dynamiczne["axes"] = []
-    for kolor, nazwa in (("#ef4444", "oś X urządzenia"),
-                         ("#22c55e", "oś Y urządzenia"),
-                         ("#3b82f6", "oś Z urządzenia")):
+    for kolor, nazwa in (("#f87171", "oś X urządzenia"),
+                         ("#4ade80", "oś Y urządzenia"),
+                         ("#60a5fa", "oś Z urządzenia")):
         dynamiczne["axes"].append(len(data))
         data.append({
             "type": "scatter3d", "mode": "lines", "name": nazwa,
             "x": [], "y": [], "z": [],
-            "line": {"color": kolor, "width": 6},
+            "line": {"color": kolor, "width": 5},
             "hoverinfo": "skip", "showlegend": False,
         })
 
-    dynamiczne["marker"] = len(data)
-    data.append({
-        "type": "scatter3d", "mode": "markers", "name": "nadgarstek",
-        "x": [], "y": [], "z": [],
-        "marker": {"size": 6, "color": "#0f172a"},
-        "hoverinfo": "skip", "showlegend": False,
-    })
-
     def os(tytul, klucz):
         return {
-            "title": {"text": tytul},
-            "range": [round(zakres[klucz][0], 2), round(zakres[klucz][1], 2)],
-            "backgroundcolor": "#f8fafc",
-            "gridcolor": "#e2e8f0",
-            "zerolinecolor": "#cbd5e1",
+            "title": {"text": tytul, "font": {"color": "#94a3b8", "size": 11}},
+            # Zaokrąglenie idzie do mikrometra, a nie do setnej centymetra:
+            # przy `aspectmode: cube` Plotly rozciąga zakresy do sześcianu,
+            # więc nierówne boki po zaokrągleniu zniekształcałyby tor.
+            "range": [round(zakres[klucz][0], 4), round(zakres[klucz][1], 4)],
+            "backgroundcolor": "#0f172a",
+            "gridcolor": "rgba(148,163,184,0.16)",
+            "zerolinecolor": "rgba(148,163,184,0.35)",
+            "color": "#64748b",
             "showspikes": False,
         }
 
     layout = {
-        "template": "plotly_white",
+        # Ciemna scena, bo animacja to jasny obiekt w ruchu na tle
+        # nieruchomej siatki — na białym tle jedno i drugie ma ten sam
+        # ciężar i tor gubi się w gridzie.
+        "paper_bgcolor": "#0b1220",
+        "plot_bgcolor": "#0b1220",
         "margin": {"l": 0, "r": 0, "t": 0, "b": 0},
-        "showlegend": True,
-        "legend": {"orientation": "h", "y": 1.02, "yanchor": "bottom", "x": 0},
+        "showlegend": False,
+        "hovermode": False,
         "scene": {
             "xaxis": os("X [cm]", "x"),
             "yaxis": os("Y [cm]", "y"),
@@ -951,6 +949,7 @@ def _build_figure(pos_cm, zakres, watch_color="#1d4ed8"):
             # rozciągnięty w osi, w której akurat było najmniej ruchu.
             "aspectmode": "cube",
             "camera": {"eye": {"x": 1.5, "y": -1.7, "z": 0.9}},
+            "dragmode": "orbit",
         },
         "uirevision": "motion3d",   # obrót sceny przeżywa podmianę danych
     }
@@ -962,22 +961,17 @@ def _build_figure(pos_cm, zakres, watch_color="#1d4ed8"):
 #  GŁÓWNE WEJŚCIE
 # ============================================================
 
-def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
-                 zupt=True, smooth=True, pos_scale=1.0, watch_scale=1.0):
+def build_motion(prep, lo, hi, phases=(), fps=NO_FPS_LIMIT, smooth=True,
+                 watch_scale=1.0):
     """Buduje scenę i klatki dla zakresu wierszy [lo, hi).
 
     KLATKA = PRAWDZIWA PRÓBKA Z PLIKU. Nie ma tu przepróbkowania na
     okrągły raster typu 60 kl/s — każda klatka to jeden wiersz CSV, ze
     swoim własnym, zmierzonym czasem. Czujnik nie próbkuje idealnie
-    równo (widzieliśmy odstępy od 7,2 do 12,8 ms przy nominalnych 10 ms)
-    i ta nierówność jest częścią tego, jak ruch naprawdę wyglądał.
-    Wcześniejsza wersja interpolowała liniowo na równą siatkę 60 kl/s;
-    na tych danych kosztowało to zerowo pod względem amplitudy, ale
-    każda klatka była wtedy średnią ważoną dwóch pomiarów, a nie
-    pomiarem. Teraz nie jest.
+    równo i ta nierówność jest częścią tego, jak ruch naprawdę wyglądał.
 
-    `fps` nie jest już częstotliwością docelową, tylko GÓRNYM LIMITEM:
-    gdy plik ma gęstsze próbkowanie, bierzemy co k-tą próbkę. Nadal
+    `fps` nie jest częstotliwością docelową, tylko GÓRNYM LIMITEM: gdy
+    plik ma gęstsze próbkowanie, bierzemy co k-tą próbkę. Nadal
     prawdziwą — nigdy uśrednioną.
 
     Odtwarzacz w przeglądarce dobiera klatkę po czasie z zegara
@@ -1005,20 +999,59 @@ def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
         dt = np.clip(dt, DT_MIN, GAP_DT)
         t = np.concatenate([[0.0], np.cumsum(dt)])
 
+    krok_s = float(np.median(dt))
+    okno = max(3, int(round(SMOOTH_S / krok_s))) if krok_s > 0 else 3
+
     # ---------- orientacja ----------
-    interpolowana = False
+    gyr = _boxcar(prep["gyr"][wyc], okno) if prep["gyr"] is not None else None
+    acc = prep["acc"][wyc] if prep["acc"] is not None else None
+
+    wygladzona = False
+    niezgodnosc = None
     if prep["rot"] is not None:
         rw = prep["rotw"][wyc] if prep["rotw"] is not None else None
-        q = _quat_from_rotvec(prep["rot"][wyc], rw)
+        q, opis_w = _quat_from_rotvec(prep["rot"][wyc], dt, rw, acc, gyr)
         if smooth:
-            q, interpolowana = _smooth_held(q, t)
-        source = "fused" if prep["gyr"] is not None else "rot"
-        opis_orientacji = ("orientacja z rotation vectora, interpolowana "
-                           "między aktualizacjami czujnika") if interpolowana \
-            else "orientacja z rotation vectora (każda klatka to pomiar)"
+            q, wygladzona = _smooth_quat(q)
+
+        # Rotation vector kontra żyroskop.
+        #
+        # To jedyny w całej ścieżce test, który potrafi POWIEDZIEĆ, że
+        # orientacja jest zepsuta, zamiast ją narysować. Prędkość kątowa
+        # daje się policzyć na dwa niezależne sposoby: z pochodnej
+        # kwaternionów i wprost z żyroskopu. Na zdrowym zapisie wychodzą
+        # praktycznie te same przebiegi. Gdy rotation vector przeskakuje —
+        # bo przeszedł przez filtr dolnoprzepustowy, bo w zgubiło znak,
+        # bo plik jest uszkodzony — jego pochodna staje się grzebieniem
+        # igieł, a żyroskop zostaje gładki. Wystarczy porównać.
+        #
+        # Próg jest wysoko (błąd wielkości samego sygnału), bo pomyłka
+        # w drugą stronę też kosztuje: zdrowy rotation vector jest lepszym
+        # źródłem niż całkowany żyroskop, który nie ma odniesienia kursu.
+        if gyr is not None:
+            omega_q = _boxcar(_quat_angular_velocity(q, t), okno)
+            skala = float(np.sqrt((gyr ** 2).sum(axis=1).mean()))
+            if skala > 1e-6:
+                niezgodnosc = float(
+                    np.sqrt(((omega_q - gyr) ** 2).sum(axis=1).mean()) / skala)
+
+        if niezgodnosc is not None and niezgodnosc > ROT_GYRO_MAX:
+            q = _integrate_gyro(gyr, dt, acc)
+            source = "gyro"
+            opis_orientacji = (
+                f"rotation vector rozjeżdża się z żyroskopem "
+                f"({niezgodnosc:.1f}× sygnał) — orientacja całkowana "
+                f"z żyroskopu")
+            wygladzona = False
+        else:
+            source = "fused" if gyr is not None else "rot"
+            opis_orientacji = "orientacja z rotation vectora"
+            if wygladzona:
+                opis_orientacji += ", wygładzona między aktualizacjami czujnika"
+            if opis_w != "rotw z pliku":
+                opis_orientacji += f" ({opis_w})"
     elif prep["gyr"] is not None:
-        q = _integrate_gyro(prep["gyr"][wyc], dt,
-                            prep["acc"][wyc] if prep["acc"] is not None else None)
+        q = _integrate_gyro(gyr, dt, acc)
         source = "gyro"
         opis_orientacji = "orientacja całkowana z żyroskopu"
     else:
@@ -1027,7 +1060,12 @@ def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
             "nie ma z czego odtworzyć orientacji.")
 
     R = _quat_matrices(q)
-    gyr = prep["gyr"][wyc] if prep["gyr"] is not None else None
+
+    # ---------- prędkość kątowa ----------
+    # Żyroskop mierzy ją wprost i gęściej niż aktualizuje się rotation
+    # vector, więc ma pierwszeństwo. Bez niego różniczkujemy orientację.
+    omega = gyr if gyr is not None else _boxcar(_quat_angular_velocity(q, t), okno)
+    domega = _derivative(omega, t)
 
     # ---------- przyspieszenie w układzie świata ----------
     kandydaci = []
@@ -1037,32 +1075,37 @@ def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
     if prep["lin"] is not None:
         kandydaci.append(("linacc*", _to_world(R, prep["lin"][wyc])))
 
-    if kandydaci:
-        # Ruch nadgarstka w oknie uderzenia zaczyna się i kończy w spoczynku,
-        # więc jego przyspieszenie ma średnią bliską zeru. Ta średnia jest
-        # więc miarą błędu — wybieramy serię, w której jest mniejsza. Na
-        # danych z zegarka raz wygrywa acc*, raz linacc*, zależnie od tego,
-        # jak plik był zapisany.
-        opis_acc, a_world = min(
-            kandydaci, key=lambda k: float(np.linalg.norm(k[1].mean(axis=0))))
-        pozycja_znana = True
-    else:
-        opis_acc = "brak akcelerometru — sam obrót"
-        a_world = np.zeros((len(t), 3))
-        pozycja_znana = False
+    # ---------- pozycja z modelu dźwigni ----------
+    #
+    # Gdy plik ma i acc*, i linacc*, nie zgadujemy, która seria jest lepsza:
+    # dopasowujemy dźwignię do obu i bierzemy tę, którą model tłumaczy
+    # lepiej. Na danych z zegarka raz wygrywa jedna, raz druga — zależnie
+    # od tego, jak plik był zapisany.
+    najlepsze = None
+    for opis_acc, a_world in kandydaci:
+        d, jakosc = _lever_fit(R, omega, domega, _boxcar(a_world, okno))
+        if najlepsze is None or jakosc > najlepsze[2]:
+            najlepsze = (opis_acc, d, jakosc)
 
-    # ---------- pozycja ----------
-    pos, vel, postoje, progi_zupt = _positions(a_world, gyr, dt, hp_hz, zupt)
+    if najlepsze is None or not najlepsze[1].any():
+        opis_acc = ("brak akcelerometru — sam obrót" if najlepsze is None
+                    else "przyspieszenia nie da się wytłumaczyć obrotem — sam obrót")
+        d = np.zeros(3)
+        jakosc = 0.0
+        pozycja_znana = False
+    else:
+        opis_acc, d, jakosc = najlepsze
+        pozycja_znana = True
+
+    pos = _to_world(R, np.broadcast_to(d, (len(t), 3)))
+    pos -= pos.mean(axis=0)
+    vel = _to_world(R, np.cross(omega, d))
 
     # ---------- klatki = próbki z pliku ----------
     czas = float(t[-1])
     liczba_probek = len(t)
     fps_natywne = (liczba_probek - 1) / czas if czas > 0 else 0.0
 
-    # Krok decymacji. Bierzemy co k-tą PRAWDZIWĄ próbkę — nigdy średnią
-    # z sąsiednich. Limit z `fps` przydaje się przy plikach 400 Hz i wyżej,
-    # gdzie i tak nie da się tego zobaczyć; MAX_FRAMES pilnuje rozmiaru
-    # odpowiedzi.
     krok = 1
     if fps > 0 and fps_natywne > fps:
         # Margines na zaokrąglenie: przy zapisie dokładnie 400 Hz i limicie
@@ -1081,37 +1124,38 @@ def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
     klatki = len(idx)
     tk = t[idx]
     pos_k = pos[idx]
-    vel_k = vel[idx]
     q_k = q[idx]
 
-    # Statystyki liczą się z metrów RZECZYWISTYCH, scena rysuje się
-    # w centymetrach i dopiero tu wchodzi pos_scale — inaczej podkręcenie
-    # skali dla czytelności zawyżałoby raportowaną drogę nadgarstka.
+    # Statystyki liczą się z metrów, scena rysuje w centymetrach.
     droga = float(np.linalg.norm(np.diff(pos_k, axis=0), axis=1).sum())
-    v_max = float(np.linalg.norm(vel_k, axis=1).max())
-
-    pos_cm = pos_k * 100.0 * float(pos_scale)
+    v_max = float(np.linalg.norm(vel, axis=1).max())
+    pos_cm = pos_k * 100.0
 
     # ---------- zakres sceny ----------
     #
     # Bok sześcianu to rozpiętość ruchu POWIĘKSZONA dokładnie o tyle, ile
     # wystaje poza nadgarstek bryła zegarka razem z osiami urządzenia.
-    # Plotly przycina wszystko, co wypada poza `range`, a osie sięgały
-    # dalej niż margines — więc za każdym razem, gdy ręka dochodziła do
-    # skraju swojego toru, osie chowały się pod ścianą sceny. Działo się
-    # to w położeniach skrajnych, czyli tam, gdzie akurat najwięcej widać.
+    # Plotly przycina wszystko, co wypada poza `range`, a osie sięgają
+    # dalej niż sama bryła — bez tego marginesu chowałyby się pod ścianą
+    # sceny dokładnie w położeniach skrajnych, czyli tam, gdzie najwięcej
+    # widać.
     srodek = (pos_cm.max(axis=0) + pos_cm.min(axis=0)) / 2.0
     rozpietosc = float((pos_cm.max(axis=0) - pos_cm.min(axis=0)).max())
 
-    # Skala odniesienia dla bryły i osi. Przy ruchu drobniejszym niż
-    # MIN_SPAN_CM bierze się z podłogi — inaczej zegarek kurczyłby się
-    # razem z ruchem i nie byłoby po nim widać, jak jest obrócony.
+    # Bryła zegarka skaluje się do ruchu, ale nie w dół bez końca:
+    # MIN_SPAN_CM jest podłogą ODNIESIENIA, żeby przy drobnym ruchu (albo
+    # przy samym obrocie w miejscu) zegarek nie skurczył się razem z nim
+    # do niewidocznego punktu.
     skala = max(rozpietosc, MIN_SPAN_CM)
     rozmiar_watch = skala * WATCH_FRACTION * float(watch_scale)
     dlugosc_osi = rozmiar_watch * AXIS_FRACTION
     margines = max(dlugosc_osi, rozmiar_watch * WATCH_RADIUS) * 1.08
 
-    bok = max(rozpietosc + 2.0 * margines, MIN_SPAN_CM)
+    # Bok wychodzi z samego ruchu i marginesu — bez własnej podłogi.
+    # Podłoga na BOKU dawała odwrotny skutek niż zamierzony: przy ruchu
+    # mniejszym od niej rozdmuchiwała kadr do stałego rozmiaru i to, co
+    # miało być widoczne, malało do kilku pikseli pośrodku pustej sceny.
+    bok = rozpietosc + 2.0 * margines
     zakres = {
         "x": (srodek[0] - bok / 2, srodek[0] + bok / 2),
         "y": (srodek[1] - bok / 2, srodek[1] + bok / 2),
@@ -1120,52 +1164,31 @@ def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
 
     # ---------- fazy ----------
     spans = _phase_spans(phases, t, lo, hi, tk)
-
     faza_klatki = np.full(klatki, -1, dtype=np.int64)
     for nr, span in enumerate(spans):
         faza_klatki[span["i0"]:span["i1"] + 1] = nr
 
-    figure, dynamiczne = _build_figure(pos_cm, zakres)
+    verts, faces, kolory = _watch_geometry(rozmiar_watch)
+    figure, dynamiczne = _build_figure(pos_cm, zakres, kolory)
 
-    # ---------- bryła zegarka i osie ----------
-    # `rozmiar_watch` policzył się wyżej, razem z marginesem sceny —
-    # jedno zależy od drugiego i nie może się rozjechać. Wszystko jest
-    # w CENTYMETRACH, nic tu już nie wraca na metry.
-    verts, faces = _watch_geometry(rozmiar_watch)
-
-    etykieta = f"{opis_orientacji}, pozycja z {opis_acc}"
-
-    # Opis obróbki, która NAPRAWDĘ weszła na ten konkretny zapis. Nie
-    # deklaracja z dokumentacji, tylko użyte progi — po to, żeby dało się
-    # odróżnić „ruchu nie było” od „ruch wpadł pod próg i został zdjęty”.
+    # ---------- opis ----------
     if not pozycja_znana:
-        opis_filtrow = "brak akcelerometru — pozycji nie liczymy"
-    elif not zupt:
-        opis_filtrow = (f"ZUPT wyłączony w zapytaniu, "
-                        f"detrend {hp_hz:g} Hz na prędkości i pozycji")
-    elif progi_zupt is None:
-        opis_filtrow = (f"detrend {hp_hz:g} Hz na prędkości i pozycji, "
-                        f"bez ZUPT — w zakresie nie ma chwili bezruchu, "
-                        f"o którą można zaczepić zero")
+        opis_modelu = ("bez pozycji — animacja pokazuje sam obrót "
+                       "nadgarstka w miejscu")
+    elif jakosc < LEVER_FIT_WARN:
+        opis_modelu = (f"tor z ramienia {np.linalg.norm(d) * 100:.0f} cm, ale model "
+                       f"tłumaczy tylko {jakosc * 100:.0f}% przyspieszenia — "
+                       f"ruch miał dużą składową przesunięcia całej ręki")
     else:
-        progi_opis = f"|a| < {progi_zupt[0]:.3f} m/s²"
-        if progi_zupt[1] is not None:
-            progi_opis += f" i |ω| < {progi_zupt[1]:.3f} rad/s"
-        opis_filtrow = (f"ZUPT przy {progi_opis} (aktywność w oknie "
-                        f"{STILL_WIN_S * 1000:.0f} ms), "
-                        f"detrend pozycji {hp_hz * 0.5:g} Hz")
+        opis_modelu = (f"tor z ramienia {np.linalg.norm(d) * 100:.0f} cm "
+                       f"(model tłumaczy {jakosc * 100:.0f}% przyspieszenia)")
 
     return {
         "figure": figure,
         "payload": {
             "t": [round(float(v), 4) for v in tk],
-            # Cztery miejsca po przecinku w centymetrach to mikrometr.
-            # Trzy (10 µm) wystarczały, dopóki najmniejsza scena miała
-            # 6 cm; przy scenie centymetrowej byłaby to już jedna
-            # tysięczna kadru, czyli widoczne schodki na drobnym ruchu.
             "pos": [[round(float(c), 4) for c in wiersz] for wiersz in pos_cm],
             "quat": [[round(float(c), 6) for c in wiersz] for wiersz in q_k],
-            "speed": [round(float(v), 4) for v in np.linalg.norm(vel_k, axis=1)],
             "phase": faza_klatki.tolist(),
             "verts": [[round(c, 4) for c in v] for v in verts],
             "faces": {"i": [f[0] for f in faces],
@@ -1176,42 +1199,42 @@ def build_motion(prep, lo, hi, phases=(), fps=DEFAULT_FPS, hp_hz=0.35,
             "spans": spans,
         },
         "meta": {
-            "label": etykieta,
-            "filters": opis_filtrow,
+            "label": f"{opis_orientacji}; {opis_modelu}",
             "source": source,
+            "acc_source": opis_acc,
             "frames": klatki,
             # Ostatnia klatka JEST ostatnią próbką zaznaczenia, więc czas
-            # animacji i długość wycinka to teraz jedno i to samo.
+            # animacji i długość wycinka to jedno i to samo.
             "duration": round(czas, 4),
-            # Średnia liczba klatek na sekundę — informacyjnie, do podpisu.
-            # Odtwarzacz jej NIE używa: klatki nie leżą w równym rastrze,
-            # numer dobiera się szukaniem po `payload.t`.
-            "fps": round((klatki - 1) / czas, 2) if czas > 0 else 0.0,
             "sample_rate": round(fps_natywne, 2),
             "stride": krok,
-            "interpolated": interpolowana,
+            "smoothed": wygladzona,
+            # Rozjazd rotation vectora z żyroskopem, w wielokrotnościach
+            # samego sygnału. None = nie było czym porównać. Powyżej
+            # ROT_GYRO_MAX orientacja poszła z żyroskopu — bez tej liczby
+            # nie da się zauważyć, że plik ma zepsuty wektor obrotu.
+            "rot_vs_gyro": (round(niezgodnosc, 3)
+                            if niezgodnosc is not None else None),
+            # Zastrzeżenie o pochodzeniu pliku dokłada widok, gdy musiał
+            # sięgnąć po wersję przygotowaną zamiast surowej.
+            "source_file": None,
             "rows": hi - lo,
             "lo": lo,
             "hi": hi,
             "path_cm": round(droga * 100.0, 2),
             "v_max": round(v_max, 4),
             "has_position": pozycja_znana,
+            # Długość dopasowanego ramienia i jakość dopasowania. Bez tej
+            # pary nie da się odróżnić „ruch był mały” od „modelu nie ma
+            # jak dopasować”.
+            "lever_cm": round(float(np.linalg.norm(d)) * 100.0, 1),
+            "lever_fit": round(jakosc, 3),
+            # Bok sześcianu sceny. Bez tej liczby „mały ruch” i „duży ruch”
+            # wyglądają na ekranie tak samo — scena skaluje się do
+            # zawartości, więc dopiero ona mówi, co się właściwie ogląda.
+            "span_cm": round(bok, 3),
             "time_source": prep["time_source"],
             "gaps": prep["gaps"],
-            "still_samples": postoje,
-            # Bok sześcianu sceny. Bez tej liczby „mały ruch” i „duży
-            # ruch” wyglądają na ekranie tak samo — scena skaluje się
-            # do zawartości, więc dopiero ona mówi, co się właściwie
-            # ogląda.
-            "span_cm": round(bok, 3),
-            "hp_hz": round(float(hp_hz), 4),
-            # Progi, przy których faktycznie zadziałał ZUPT (None =
-            # nie zadziałał wcale). Pokazujemy je, bo to jedyny zabieg
-            # w całej ścieżce, który KASUJE zmierzony ruch.
-            "still_threshold": ({"acc": round(progi_zupt[0], 5),
-                                 "gyr": (round(progi_zupt[1], 5)
-                                         if progi_zupt[1] is not None else None)}
-                                if progi_zupt else None),
             "phases": spans,
         },
     }
