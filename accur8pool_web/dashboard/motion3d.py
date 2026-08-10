@@ -56,23 +56,13 @@ CO JESZCZE JEST TRUDNE W TYCH DANYCH
    czasu jest WYKRYWANA (_time_axis), a nie zakładana.
 
 2. `rotw` bywa śmieciem (w jednym z plików ma stałą wartość 246), więc
-   czwarta składowa kwaternionu bywa odtwarzana z pozostałych trzech.
-   Androidowe w = sqrt(1 - x² - y² - z²) jest jednak prawdziwe TYLKO do
-   180° obrotu — powyżej daje obrót odwrotny, a granicę widać w danych
-   z zegarka regularnie. Znak w odtwarza więc _quat_w z kinematyki,
-   a gałąź rozwiązania wybiera pion z akcelerometru.
+   czwarta składowa kwaternionu jest LICZONA z pozostałych trzech —
+   dokładnie tak, jak robi to Android dla TYPE_ROTATION_VECTOR:
+   w = sqrt(1 - x² - y² - z²).
 
 3. Rotation vector przychodzi wolniej niż akcelerometr i jest w pliku
    POWTÓRZONY między aktualizacjami. Animacja z takich danych chodzi
    skokowo, dlatego przetrzymane próbki są wygładzane (_smooth_quat).
-
-4. Wektora obrotu NIE WOLNO filtrować składowa po składowej — jego
-   składowe wiąże warunek |q| = 1, o którym filtr nie wie. Dlatego
-   animacja czyta plik SUROWY, a nie wersję z prepared_data, gdzie
-   rotx/roty/rotz przechodzą przez filtr dolnoprzepustowy (a rotw nie).
-   Szczegóły przy views._dataset_raw_path. Gdyby mimo to trafił się
-   zapis z zepsutą orientacją, wyłapuje go porównanie z żyroskopem
-   w build_motion i animacja przechodzi na całkowanie żyroskopu.
 
 UKŁADY WSPÓŁRZĘDNYCH
 --------------------
@@ -162,12 +152,6 @@ LEVER_MAX = 0.90
 # przypadek obrotu wokół jednej osi, w którym jeden kierunek d nie ma
 # w danych żadnego pokrycia i bez tego wyszedłby z dzielenia przez zero.
 LEVER_RIDGE = 1e-3
-
-# Ile razy prędkość kątowa policzona z rotation vectora może rozminąć się
-# z żyroskopem, zanim uznamy rotation vector za niezdatny i przejdziemy na
-# całkowanie żyroskopu. 1.0 znaczy „błąd wielkości samego sygnału”, czyli
-# przebieg, w którym nie ma już informacji — patrz build_motion.
-ROT_GYRO_MAX = 1.0
 
 # Poniżej tego dopasowania mówimy wprost, że dźwignia tłumaczy zmierzone
 # przyspieszenie słabo — ruch miał zapewne dużą składową przesunięcia,
@@ -364,61 +348,6 @@ def _pion_w_swiecie(q, acc):
     """
     R = _quat_matrices(_quat_normalize(q))
     return float(np.einsum("nj,nj->n", R[:, 2, :], acc).mean())
-
-
-def _quat_from_rotvec(rv, dt, rw=None, acc=None, gyr=None):
-    """Kwaternion z ROTATION_VECTOR, razem ze znakiem czwartej składowej.
-
-    Kolumna `rotw` niesie ten znak wprost, więc gdy jest wiarygodna,
-    wygrywa ze wszystkim. Bywa jednak zapisana błędnie (w jednym z plików
-    ma stałą wartość 246), a w wersji PRZYGOTOWANEJ pliku bywa niespójna
-    z rot* z innego powodu: transform_raw_df filtruje rotx/roty/rotz
-    dolnoprzepustowo, a rotw zostawia nietknięte. Dlatego bierzemy ją
-    tylko wtedy, gdy faktycznie domyka kwaternion do długości 1.
-
-    Bez wiarygodnego rotw znak czwartej składowej odtwarza _quat_w, ale
-    ten potrzebuje znaku PIERWSZEJ próbki, którego z samych rot* nie da
-    się odczytać. Liczymy więc obie gałęzie rozwiązania i wybieramy tę,
-    w której grawitacja wychodzi w górę (_pion_w_swiecie). Wyboru nie da
-    się odłożyć na potem: gałęzie różnią się nie tylko globalnym znakiem,
-    ale i miejscami przejść przez zero.
-
-    Zwraca (kwaterniony, opis pochodzenia czwartej składowej).
-    """
-    n2 = (rv * rv).sum(axis=1)
-
-    # |v| > 1 jest fizycznie niemożliwe (|v| = |sin(θ/2)|), więc taka
-    # próbka znaczy, że wektor obrotu został po drodze zniekształcony —
-    # np. przez filtr dolnoprzepustowy, który przestrzeliwuje na zboczu.
-    # Przycięcie samego n2 dawałoby w tych miejscach w = 0, czyli obrót
-    # o równe 180° wzięty znikąd; skalujemy więc CAŁY wektor z powrotem
-    # na sferę, co zachowuje przynajmniej oś obrotu.
-    zepsute = n2 > 1.0
-    if zepsute.any():
-        rv = rv.copy()
-        rv[zepsute] /= np.sqrt(n2[zepsute])[:, None]
-        n2 = np.minimum(n2, 1.0)
-
-    absw = np.sqrt(np.maximum(1.0 - n2, 0.0))
-
-    if rw is not None and np.mean(np.abs(np.sqrt(n2 + rw * rw) - 1.0) < 0.05) > 0.9:
-        q = np.column_stack([rw, rv])
-        opis = "rotw z pliku"
-    else:
-        galezie = [np.column_stack([_quat_w(rv, absw, dt, gyr, s), rv])
-                   for s in (1.0, -1.0)]
-        if acc is None:
-            # Nie ma czym rozstrzygnąć — zostaje założenie Androida (w > 0).
-            q = galezie[0]
-            opis = "znak w z kinematyki, bez potwierdzenia pionem"
-        else:
-            q = max(galezie, key=lambda kandydat: _pion_w_swiecie(kandydat, acc))
-            opis = "znak w z kinematyki, gałąź wybrana wg pionu"
-
-    if zepsute.any():
-        opis += f", {int(zepsute.sum())} próbek poza sferą jednostkową"
-
-    return _quat_align_signs(_quat_normalize(q)), opis
 
 
 def _smooth_quat(q):
@@ -1003,53 +932,16 @@ def build_motion(prep, lo, hi, phases=(), fps=NO_FPS_LIMIT, smooth=True,
     okno = max(3, int(round(SMOOTH_S / krok_s))) if krok_s > 0 else 3
 
     # ---------- orientacja ----------
-    gyr = _boxcar(prep["gyr"][wyc], okno) if prep["gyr"] is not None else None
-    acc = prep["acc"][wyc] if prep["acc"] is not None else None
-
     wygladzona = False
-    niezgodnosc = None
     if prep["rot"] is not None:
         rw = prep["rotw"][wyc] if prep["rotw"] is not None else None
         q, opis_w = _quat_from_rotvec(prep["rot"][wyc], dt, rw, acc, gyr)
         if smooth:
             q, wygladzona = _smooth_quat(q)
-
-        # Rotation vector kontra żyroskop.
-        #
-        # To jedyny w całej ścieżce test, który potrafi POWIEDZIEĆ, że
-        # orientacja jest zepsuta, zamiast ją narysować. Prędkość kątowa
-        # daje się policzyć na dwa niezależne sposoby: z pochodnej
-        # kwaternionów i wprost z żyroskopu. Na zdrowym zapisie wychodzą
-        # praktycznie te same przebiegi. Gdy rotation vector przeskakuje —
-        # bo przeszedł przez filtr dolnoprzepustowy, bo w zgubiło znak,
-        # bo plik jest uszkodzony — jego pochodna staje się grzebieniem
-        # igieł, a żyroskop zostaje gładki. Wystarczy porównać.
-        #
-        # Próg jest wysoko (błąd wielkości samego sygnału), bo pomyłka
-        # w drugą stronę też kosztuje: zdrowy rotation vector jest lepszym
-        # źródłem niż całkowany żyroskop, który nie ma odniesienia kursu.
-        if gyr is not None:
-            omega_q = _boxcar(_quat_angular_velocity(q, t), okno)
-            skala = float(np.sqrt((gyr ** 2).sum(axis=1).mean()))
-            if skala > 1e-6:
-                niezgodnosc = float(
-                    np.sqrt(((omega_q - gyr) ** 2).sum(axis=1).mean()) / skala)
-
-        if niezgodnosc is not None and niezgodnosc > ROT_GYRO_MAX:
-            q = _integrate_gyro(gyr, dt, acc)
-            source = "gyro"
-            opis_orientacji = (
-                f"rotation vector rozjeżdża się z żyroskopem "
-                f"({niezgodnosc:.1f}× sygnał) — orientacja całkowana "
-                f"z żyroskopu")
-            wygladzona = False
-        else:
-            source = "fused" if gyr is not None else "rot"
-            opis_orientacji = "orientacja z rotation vectora"
-            if wygladzona:
-                opis_orientacji += ", wygładzona między aktualizacjami czujnika"
-            if opis_w != "rotw z pliku":
-                opis_orientacji += f" ({opis_w})"
+        source = "fused" if prep["gyr"] is not None else "rot"
+        opis_orientacji = ("orientacja z rotation vectora, wygładzona między "
+                           "aktualizacjami czujnika") if wygladzona \
+            else "orientacja z rotation vectora (każda klatka to pomiar)"
     elif prep["gyr"] is not None:
         q = _integrate_gyro(gyr, dt, acc)
         source = "gyro"
@@ -1064,7 +956,8 @@ def build_motion(prep, lo, hi, phases=(), fps=NO_FPS_LIMIT, smooth=True,
     # ---------- prędkość kątowa ----------
     # Żyroskop mierzy ją wprost i gęściej niż aktualizuje się rotation
     # vector, więc ma pierwszeństwo. Bez niego różniczkujemy orientację.
-    omega = gyr if gyr is not None else _boxcar(_quat_angular_velocity(q, t), okno)
+    omega = prep["gyr"][wyc] if prep["gyr"] is not None else _quat_angular_velocity(q, t)
+    omega = _boxcar(omega, okno)
     domega = _derivative(omega, t)
 
     # ---------- przyspieszenie w układzie świata ----------
@@ -1209,15 +1102,6 @@ def build_motion(prep, lo, hi, phases=(), fps=NO_FPS_LIMIT, smooth=True,
             "sample_rate": round(fps_natywne, 2),
             "stride": krok,
             "smoothed": wygladzona,
-            # Rozjazd rotation vectora z żyroskopem, w wielokrotnościach
-            # samego sygnału. None = nie było czym porównać. Powyżej
-            # ROT_GYRO_MAX orientacja poszła z żyroskopu — bez tej liczby
-            # nie da się zauważyć, że plik ma zepsuty wektor obrotu.
-            "rot_vs_gyro": (round(niezgodnosc, 3)
-                            if niezgodnosc is not None else None),
-            # Zastrzeżenie o pochodzeniu pliku dokłada widok, gdy musiał
-            # sięgnąć po wersję przygotowaną zamiast surowej.
-            "source_file": None,
             "rows": hi - lo,
             "lo": lo,
             "hi": hi,
