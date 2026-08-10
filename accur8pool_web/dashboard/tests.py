@@ -45,12 +45,16 @@ def _world_to_device(v, ang):
                             s * v[:, 0] + c * v[:, 2]])
 
 
-def imu_csv(seconds=8.0, with_lin=True, with_rot=True, with_mag=False):
+def imu_csv(seconds=8.0, with_lin=True, with_rot=True, with_mag=False,
+            csv_version=None):
     """Ramka w formacie zapisu z zegarka: acc/gyr/rot/linacc + timestamp.
 
-    `with_mag` domyślnie wyłączone, bo magnetometru nie potrzebuje ani
-    rekonstrukcja 3D, ani wykres — dokłada go tylko test przygotowania
-    danych, gdzie transform_raw_df wymaga kompletu kolumn."""
+    Poszczególne grupy kolumn są opcjonalne, bo zapisy różnią się między
+    wersjami — i właśnie na tym potykało się przygotowanie danych.
+
+    `csv_version` przełącza na format V2: kolumna `csv_version` decyduje
+    w transform_raw_df o wyborze transformera, a `timestamp` jest wtedy
+    BEZWZGLĘDNYM znacznikiem w nanosekundach, nie odstępem w ms."""
     n = int(FS_IMU * seconds)
     t = np.arange(n) / FS_IMU
 
@@ -86,10 +90,16 @@ def imu_csv(seconds=8.0, with_lin=True, with_rot=True, with_mag=False):
         # Pole ziemskie (~50 µT na północ) obracane razem z urządzeniem.
         mag = _world_to_device(np.tile([22.0, 0.0, 44.0], (n, 1)), ang)
         kolumny.update({"magx": mag[:, 0], "magy": mag[:, 1], "magz": mag[:, 2]})
+    if csv_version is not None:
+        kolumny["timestamp"] = 1.7e18 + np.arange(n) * (1e9 / FS_IMU)
+        kolumny["csv_version"] = np.full(n, csv_version)
 
     naglowek = ",".join(kolumny)
     wiersze = np.column_stack(list(kolumny.values()))
-    return naglowek + "\n" + "\n".join(",".join(f"{v:.8g}" for v in w) for w in wiersze) + "\n"
+    # .17g, a nie .8g: znacznik czasu V2 to epoka w nanosekundach (~1.7e18)
+    # i przy ośmiu cyfrach znaczących wszystkie wiersze miałyby JEDNAKOWĄ
+    # wartość — odstęp między próbkami zniknąłby w zaokrągleniu.
+    return naglowek + "\n" + "\n".join(",".join(f"{v:.17g}" for v in w) for w in wiersze) + "\n"
 
 
 class BaseDataTest(TestCase):
@@ -404,6 +414,41 @@ class UploadTests(BaseDataTest):
                         "jerk_accx", "roll", "pitch", "session_index"):
             self.assertIn(kolumna, prepared.columns)
         self.assertEqual(len(prepared), len(raw))
+
+    def test_brak_opcjonalnych_czujnikow_nie_blokuje_przygotowania(self):
+        # Listy kolumn do filtrowania w transform_raw_df opisują KOMPLET
+        # czujników, ale zapis bez magnetometru jest normalny. Wcześniej
+        # kończyło się to KeyError-em i plik zostawał bez wersji
+        # przygotowanej.
+        response = self.wyslij("bez_mag.csv", imu_csv(seconds=4.0, with_mag=False))
+        self.assertTrue(response.json()["prepared"])
+
+        prepared = pd.read_csv(self.sciezki("bez_mag.csv")[1])
+        self.assertNotIn("magx", prepared.columns)
+        # Kolumny pochodne liczą się mimo braku magnetometru
+        for kolumna in ("acc_magnitude", "gyr_magnitude", "time", "roll", "pitch"):
+            self.assertIn(kolumna, prepared.columns)
+
+    def test_sam_rdzen_acc_gyr_wystarczy(self):
+        response = self.wyslij("rdzen.csv", imu_csv(seconds=4.0, with_lin=False,
+                                                    with_rot=False, with_mag=False))
+        self.assertTrue(response.json()["prepared"])
+
+    def test_zapis_v2_idzie_swoim_transformerem(self):
+        # csv_version przełącza transform_raw_df na DataFrameTransformerV2:
+        # timestamp jest bezwzględny (ns), a roll/pitch z urządzenia zostają
+        # nietknięte — policzone lądują obok, z sufiksem _calculated.
+        response = self.wyslij("v2.csv", imu_csv(seconds=4.0, with_mag=True, csv_version=2))
+        self.assertTrue(response.json()["prepared"])
+
+        prepared = pd.read_csv(self.sciezki("v2.csv")[1])
+        self.assertIn("roll_calculated", prepared.columns)
+        self.assertIn("pitch_calculated", prepared.columns)
+
+        # Oś czasu wychodzi w sekundach mimo wejścia w nanosekundach.
+        czas = prepared["time"].to_numpy()
+        self.assertAlmostEqual(czas[-1], 4.0, delta=0.05)
+        self.assertTrue(np.all(np.diff(czas) > 0))
 
     def test_plik_bez_kompletu_kolumn_wciaz_sie_wgrywa(self):
         # Transformacja wymaga m.in. magnetometru. Gdy go nie ma, upload ma
