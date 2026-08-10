@@ -227,13 +227,23 @@
                                 <span aria-hidden="true">▶</span>
                                 <span id="m3d-play-label">Odtwórz</span>
                             </button>
+                            <!-- Uderzenie trwa ułamek sekundy, więc pętla
+                                 jest włączona domyślnie — patrz motion3d.js. -->
+                            <button type="button" class="btn btn-ghost btn-sm m3d-loop is-active"
+                                    id="m3d-loop" aria-pressed="true"
+                                    title="Powtarzaj w kółko">
+                                <span aria-hidden="true">🔁</span>
+                                <span class="btn-label">Pętla</span>
+                            </button>
                             <label class="m3d-speed-label">
                                 tempo
                                 <select id="m3d-speed" class="m3d-select">
                                     <option value="0.1">0.1×</option>
                                     <option value="0.25">0.25×</option>
-                                    <option value="0.5">0.5×</option>
-                                    <option value="1" selected>1×</option>
+                                    <!-- Tempo domyślne, bo w 1× ruch
+                                         nadgarstka jest mrugnięciem. -->
+                                    <option value="0.5" selected>0.5×</option>
+                                    <option value="1">1×</option>
                                     <option value="2">2×</option>
                                 </select>
                             </label>

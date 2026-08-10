@@ -49,11 +49,10 @@ MAX_ROW_INDEX = 2_147_483_647
 # to zawsze prawdziwy wiersz CSV, a limit decyduje tylko o tym, czy przy
 # szybkim zapisie brać co drugą albo co czwartą.
 #
-# Bez parametru w zapytaniu limitu NIE MA (0 = brak). Przeglądarka celowo
-# go nie wysyła, bo odtwarzacz dobiera klatkę po czasie z zegara i chce
-# widzieć to, co czujnik zmierzył — razem z nierównym odstępem między
-# pomiarami. Rozmiaru odpowiedzi i tak pilnuje motion3d.MAX_FRAMES.
-NO_FPS_LIMIT = 0.0
+# Bez parametru w zapytaniu limitu NIE MA. Przeglądarka celowo go nie
+# wysyła, bo odtwarzacz dobiera klatkę po czasie z zegara i chce widzieć
+# to, co czujnik zmierzył — razem z nierównym odstępem między pomiarami.
+# Rozmiaru odpowiedzi i tak pilnuje motion3d.MAX_FRAMES.
 MIN_FPS = 5.0
 MAX_FPS = 1000.0
 
@@ -444,11 +443,11 @@ def api_dataset_motion3d(request, filename):
     """Scena Plotly + klatki animacji dla JEDNEGO segmentu.
 
     Zakres bierze się WYŁĄCZNIE z segmentu w bazie (?segment=<id>), nigdy
-    z widocznego fragmentu wykresu. Pozycja powstaje z dwukrotnego
-    całkowania przyspieszenia i trzyma się tylko na odcinku długości
-    uderzenia — puszczona na dowolnym zakresie, który akurat widać na
-    ekranie, pokazuje ruch, którego nie było. Segment jest więc częścią
-    kontraktu, a nie wygodą: bez niego nie ma czego liczyć.
+    z widocznego fragmentu wykresu. Tor nadgarstka powstaje z modelu
+    sztywnej dźwigni dopasowanego do TEGO ruchu (motion3d._lever_fit),
+    a taki model opisuje jedno uderzenie, nie kwadrans nagrania, w którym
+    łokieć zdążył zmienić położenie kilkaset razy. Segment jest więc
+    częścią kontraktu, a nie wygodą: bez niego nie ma czego dopasować.
 
     Czyta CSV przez motion3d.prepare(), a NIE przez _load_series — tam
     wartości są znormalizowane do 0–1 i jednostki fizyczne już nie
@@ -502,12 +501,9 @@ def api_dataset_motion3d(request, filename):
             ("hi", segment.end),
             ("phases", _phase_tuples(segment)),
             ("fps", clamp(num("fps", MIN_FPS), MIN_FPS, MAX_FPS)
-            if request.GET.get("fps") else NO_FPS_LIMIT),
-            ("hp_hz", clamp(num("hp", 0.35), 0.0, 20.0)),
-            ("zupt", flag("zupt", True)),
+             if request.GET.get("fps") else motion3d.NO_FPS_LIMIT),
             ("smooth", flag("smooth", True)),
             ("watch_scale", clamp(num("watch", 1.0), 0.2, 20.0)),
-            ("pos_scale", clamp(num("posScale", 1.0), 0.1, 50.0)),
         )
     except (TypeError, ValueError):
         return HttpResponseBadRequest("Nieprawidłowe parametry animacji 3D.")

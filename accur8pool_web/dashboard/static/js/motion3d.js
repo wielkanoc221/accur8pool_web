@@ -6,10 +6,11 @@
 
    ODTWARZANIE JEST STEROWANE ZEGAREM, NIE KLATKAMI
    ------------------------------------------------
-   To jest sedno całego pliku. Klatki przychodzą z serwera w RÓWNYM
-   rastrze czasu nagrania (co 1/fps sekundy), a pętla odtwarzania pyta
-   performance.now() o to, ile sekund minęło NAPRAWDĘ, i wylicza z tego
-   numer klatki. Skutek: sekunda animacji to sekunda z pliku CSV,
+   To jest sedno całego pliku. Każda klatka to prawdziwa próbka z CSV ze
+   swoim ZMIERZONYM czasem — a czujnik próbkuje nierówno, więc klatki nie
+   leżą w równym rastrze. Pętla odtwarzania pyta performance.now() o to,
+   ile sekund minęło NAPRAWDĘ, i dopiero z tego wyszukuje numer klatki
+   (frameForTime). Skutek: sekunda animacji to sekunda z pliku CSV,
    niezależnie od tego, czy przeglądarka rysuje 120 klatek na sekundę,
    czy 12. Naiwna pętla „narysuj następną klatkę przy każdym
    requestAnimationFrame” daje tempo zależne od monitora i od obciążenia
@@ -18,11 +19,11 @@
 
    PODZIAŁ PRACY Z SERWEREM
    ------------------------
-   Serwer liczy pozycję, orientację i tnie tor na fazy — wraca gotowa
-   scena Plotly, w której ślady statyczne (tor pocięty na kolory faz,
-   rzut na podłogę) są już narysowane raz na zawsze. Przeglądarka rusza
-   co klatkę tylko sześć śladów: ogon, bryłę zegarka, trzy osie i punkt.
-   Ich numery przychodzą w payload.dynamic — nie zgadujemy ich tutaj.
+   Serwer liczy tor i orientację i tnie ruch na fazy — wraca gotowa scena
+   Plotly, w której ślady statyczne (cały tor, jego rzut na podłogę) są
+   narysowane raz na zawsze. Przeglądarka rusza co klatkę pięć śladów:
+   ogon, bryłę zegarka i trzy osie urządzenia. Ich numery przychodzą
+   w payload.dynamic — nie zgadujemy ich tutaj.
 
    KAMERA NALEŻY DO WIDZA, NIE DO DANYCH
    -------------------------------------
@@ -49,6 +50,7 @@ document.addEventListener('DOMContentLoaded', function () {
         resetView: document.getElementById('m3d-reset-view'),
         play: document.getElementById('m3d-play'),
         playLabel: document.getElementById('m3d-play-label'),
+        loop: document.getElementById('m3d-loop'),
         speed: document.getElementById('m3d-speed'),
         seek: document.getElementById('m3d-seek'),
         clock: document.getElementById('m3d-clock'),
@@ -151,6 +153,12 @@ document.addEventListener('DOMContentLoaded', function () {
     let lastFrame = -1;      // ostatnia NARYSOWANA klatka
     let lastPhase = null;    // numer podświetlonej fazy (null = nic nie rysowano)
     let raf = null;
+
+    // Uderzenie trwa ułamek sekundy — obejrzane raz i w tempie 1× jest
+    // mrugnięciem. Zapętlenie jest więc stanem domyślnym: ruch powtarza
+    // się tak długo, jak długo się na niego patrzy, i dopiero z kilku
+    // przebiegów widać, co ręka właściwie zrobiła.
+    let looping = true;
 
     const cache = new Map();
 
@@ -413,19 +421,16 @@ document.addEventListener('DOMContentLoaded', function () {
         }).catch(err => console.error('Plotly 3D:', err));
 
         // ---- opisy ----
-        // Podtytuł ma mówić wprost, co jest POMIAREM, a co rekonstrukcją,
-        // i CO Z SYGNAŁU UBYŁO. Orientacja jest mierzona, pozycja powstaje
-        // z dwukrotnego całkowania. Progi, przy których zadziałał ZUPT,
-        // i bok sceny idą tu razem z resztą, bo bez nich nie da się
-        // odróżnić „ruchu nie było” od „ruch wpadł pod próg”, ani ocenić,
-        // czy ogląda się centymetry, czy milimetry.
+        // Podtytuł ma mówić wprost, co jest POMIAREM, a co rekonstrukcją.
+        // Orientacja jest mierzona; tor nadgarstka powstaje z dopasowanej
+        // dźwigni, więc razem z nim idzie jakość tego dopasowania i bok
+        // sceny — bez nich nie da się ocenić, czy ogląda się centymetry,
+        // czy milimetry, ani czy model w ogóle miał się o co zaczepić.
         if (els.label) {
             const czesci = [req.name, meta.label];
-            if (meta.filters) czesci.push(meta.filters);
             if (meta.span_cm) czesci.push('scena ' + meta.span_cm.toFixed(1) + ' cm');
             if (meta.stride > 1) czesci.push('co ' + meta.stride + '. próbka');
             if (meta.gaps) czesci.push(meta.gaps + ' × przerwa w nagraniu (skrócona)');
-            if (!meta.has_position) czesci.push('bez akcelerometru — sam obrót');
             els.label.textContent = czesci.join(' · ');
         }
 
@@ -482,11 +487,14 @@ document.addEventListener('DOMContentLoaded', function () {
             tz.push(p.pos[i][2]);
         }
 
+        // Jedno wywołanie na całą klatkę. Plotly przy każdym restyle
+        // przebudowuje scenę WebGL, więc pięć osobnych wywołań to pięć
+        // przebudów zamiast jednej — i to widać jako szarpanie.
         Plotly.restyle(els.plot, {
-            x: [tx, vx, osie[0].x, osie[1].x, osie[2].x, [pos[0]]],
-            y: [ty, vy, osie[0].y, osie[1].y, osie[2].y, [pos[1]]],
-            z: [tz, vz, osie[0].z, osie[1].z, osie[2].z, [pos[2]]]
-        }, [dyn.trail, dyn.watch, dyn.axes[0], dyn.axes[1], dyn.axes[2], dyn.marker]);
+            x: [tx, vx, osie[0].x, osie[1].x, osie[2].x],
+            y: [ty, vy, osie[0].y, osie[1].y, osie[2].y],
+            z: [tz, vz, osie[0].z, osie[1].z, osie[2].z]
+        }, [dyn.trail, dyn.watch, dyn.axes[0], dyn.axes[1], dyn.axes[2]]);
 
         highlightPhase(p.phase[nr]);
 
@@ -549,9 +557,8 @@ document.addEventListener('DOMContentLoaded', function () {
     // ============================================================
     //  ODTWARZACZ
     //
-    //  currentTime jest w SEKUNDACH NAGRANIA. Numer klatki wychodzi
-    //  z niego przez pomnożenie przez fps, bo klatki leżą w równym
-    //  rastrze — serwer tak je specjalnie ułożył.
+    //  currentTime jest w SEKUNDACH NAGRANIA, a numer klatki wychodzi
+    //  z niego przez wyszukiwanie po payload.t — patrz frameForTime.
     // ============================================================
 
     /** Ostatnia klatka, której czas nie wyprzedza podanej sekundy.
@@ -587,20 +594,25 @@ document.addEventListener('DOMContentLoaded', function () {
     function tick(now) {
         if (!playing) return;
 
-        const uplynelo = (now - clockStart) / 1000 * speed();
-        let czas = timeAtStart + uplynelo;
+        const dlugosc = scene.meta.duration;
+        let czas = timeAtStart + (now - clockStart) / 1000 * speed();
 
-        if (czas >= scene.meta.duration) {
-            // Koniec zakresu: pokazujemy ostatnią klatkę i zatrzymujemy się.
-            // Zapętlanie kusi, ale przy analizie uderzenia myli — nie widać,
-            // gdzie ruch się skończył, a gdzie zaczął od nowa.
-            seekTo(scene.meta.duration);
-            pause();
-            return;
+        if (czas >= dlugosc) {
+            if (!looping) {
+                // Koniec zakresu: ostatnia klatka i stop.
+                seekTo(dlugosc);
+                pause();
+                return;
+            }
+            // Zawijamy ZEGAR, a nie tylko pozycję — inaczej po każdym
+            // przebiegu animacja gubiłaby resztę z dzielenia i z czasem
+            // rozjeżdżała się z nagraniem.
+            timeAtStart = 0;
+            clockStart = now;
+            czas = 0;
         }
 
         seekTo(czas);
-
         raf = requestAnimationFrame(tick);
     }
 
@@ -638,8 +650,22 @@ document.addEventListener('DOMContentLoaded', function () {
     //  ZDARZENIA
     // ============================================================
 
+    function syncLoopButton() {
+        if (!els.loop) return;
+        els.loop.classList.toggle('is-active', looping);
+        els.loop.setAttribute('aria-pressed', String(looping));
+    }
+
     if (els.play) {
         els.play.addEventListener('click', () => (playing ? pause() : play()));
+    }
+
+    if (els.loop) {
+        syncLoopButton();
+        els.loop.addEventListener('click', function () {
+            looping = !looping;
+            syncLoopButton();
+        });
     }
 
     if (els.seek) {
