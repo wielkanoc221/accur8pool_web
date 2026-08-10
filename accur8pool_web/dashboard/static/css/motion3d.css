@@ -246,7 +246,18 @@
 
 /* Nazwa trwającej fazy. Kolor tła ustawia JS na ten sam, którym
    podświetlony jest tor na scenie — biały tekst musi być czytelny na
-   każdym z nich, stąd cień. */
+   każdym z nich, stąd cień.
+
+   PASEK ODTWARZACZA NIE MOŻE ZMIENIAĆ WYSOKOŚCI
+   ---------------------------------------------
+   Plakietka pojawia się dokładnie w chwili, w której animacja wchodzi
+   w pierwszą fazę, czyli tuż po starcie. Gdy znikała z układu
+   (`display: none`), jej powrót zmieniał sumaryczną szerokość paska,
+   ten zawijał się do drugiego wiersza, scena 3D traciła kilkanaście
+   pikseli wysokości i Plotly przekadrowywało widok — czyli kamera
+   „uciekała" na starcie odtwarzania. Dlatego plakietka zawsze zajmuje
+   swoje miejsce, a zmienia się tylko jej widoczność. Z tego samego
+   powodu ma stałą szerokość minimalną: nazwy faz są różnej długości. */
 .m3d-phase {
     padding: 3px 10px;
     border-radius: 999px;
@@ -255,10 +266,19 @@
     color: #fff;
     text-shadow: 0 1px 1px rgba(15, 23, 42, 0.35);
     white-space: nowrap;
+    min-width: 12ch;
+    text-align: center;
 }
 
-.m3d-phase[hidden] {
-    display: none;
+.m3d-phase.is-empty {
+    visibility: hidden;
+}
+
+/* Ten sam powód co wyżej: „Odtwórz" i „Pauza" mają różną długość,
+   a przycisk zmienia napis dokładnie w chwili startu animacji. */
+#m3d-play {
+    min-width: 12ch;
+    justify-content: center;
 }
 
 /* ============================================

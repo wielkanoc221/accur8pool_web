@@ -67,8 +67,19 @@ document.addEventListener('DOMContentLoaded', function () {
 
     let activeView = '2d';
 
+    // Czy stan sceny 3D w ogóle powstał. Zakładki działają także dla pliku
+    // bez kolumn IMU, a wtedy inicjalizacja kończy się na strażniku niżej
+    // i zmienne kamery nie istnieją — `resizePlot` obsługuje w tym czasie
+    // wykres 2D i nie ma prawa ich dotknąć.
+    let scena3d = false;
+
     function resizePlot(el) {
-        if (window.Plotly && el && el.data) Plotly.Plots.resize(el);
+        if (!window.Plotly || !el || !el.data) return;
+        Plotly.Plots.resize(el);
+        // Przeskalowanie kontenera potrafi przestawić kamerę sceny 3D,
+        // a widok należy do widza — więc po każdym resize wracamy do
+        // tego, co ustawił. Patrz sekcja KAMERA niżej.
+        if (scena3d && el === els.plot) restoreCamera();
     }
 
     function showView(view) {
@@ -130,6 +141,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const datasetId = window.currentDatasetId;
 
     if (!els.plot || !datasetId || !readJson('motion3d-ready', false)) return;
+
+    scena3d = true;
 
     // ============================================================
     //  STAN
@@ -234,6 +247,24 @@ document.addEventListener('DOMContentLoaded', function () {
                  els.plot.layout.scene.camera);
             if (cam) saveCamera(cam);
         });
+    }
+
+    /** Wymusza z powrotem widok wybrany przez użytkownika.
+     *
+     *  Potrzebne wszędzie tam, gdzie Plotly mogło przestawić scenę samo:
+     *  po przeskalowaniu kontenera i w chwili startu odtwarzania. To
+     *  drugie brało się z paska odtwarzacza — przełączenie „Odtwórz" na
+     *  „Pauza" i pojawienie się plakietki z nazwą fazy zmieniały szerokość
+     *  elementów, pasek zawijał się do dwóch wierszy, scena traciła kilka
+     *  pikseli wysokości i Plotly przekadrowywało widok. Sam pasek jest
+     *  już usztywniony w CSS (patrz .m3d-phase i #m3d-play), a to jest
+     *  zabezpieczenie na wypadek każdej innej przyczyny. */
+    function restoreCamera() {
+        if (!camera || !plotted || applyingCamera) return;
+        applyingCamera = true;
+        Promise.resolve(Plotly.relayout(els.plot, { 'scene.camera': camera }))
+            .catch(err => console.error('Plotly 3D:', err))
+            .then(function () { applyingCamera = false; });
     }
 
     function resetCamera() {
@@ -435,9 +466,13 @@ document.addEventListener('DOMContentLoaded', function () {
             // z żyroskopem. Jedno i drugie tłumaczy szarpiącą się bryłę
             // zegarka, więc ma być widoczne, a nie tylko w logach.
             if (meta.source_file) czesci.push('plik ' + meta.source_file);
-            if (meta.rot_vs_gyro !== null && meta.rot_vs_gyro > 0.35) {
-                czesci.push('rozjazd z żyroskopem ' +
-                            (meta.rot_vs_gyro * 100).toFixed(0) + '%');
+            if (meta.rot_gyro_cos !== null && meta.rot_gyro_cos < 0.9) {
+                czesci.push('zgodność z żyroskopem ' +
+                            (meta.rot_gyro_cos * 100).toFixed(0) + '%');
+            }
+            if (meta.jumps) czesci.push(meta.jumps + ' × przeskok orientacji');
+            if (Math.abs(meta.gyro_gain - 1) > 0.1) {
+                czesci.push('żyroskop przeskalowany ×' + meta.gyro_gain.toFixed(3));
             }
             els.label.textContent = czesci.join(' · ');
         }
@@ -554,7 +589,12 @@ document.addEventListener('DOMContentLoaded', function () {
             const span = nrFazy >= 0 ? p.spans[nrFazy] : null;
             els.phase.textContent = span ? span.label : '';
             els.phase.style.background = span ? span.color : 'transparent';
-            els.phase.hidden = !span;
+            // Plakietka NIE ZNIKA z układu, tylko przestaje być widoczna.
+            // Ukrywanie jej przez `hidden` zmieniało szerokość paska
+            // odtwarzacza w chwili wejścia w pierwszą fazę, pasek zawijał
+            // się do dwóch wierszy i scena 3D traciła wysokość — a wraz
+            // z nią kadr, który ustawił widz.
+            els.phase.classList.toggle('is-empty', !span);
         }
 
         if (els.seek && document.activeElement !== els.seek) {
@@ -636,6 +676,8 @@ document.addEventListener('DOMContentLoaded', function () {
         clockStart = performance.now();
 
         syncPlayButton();
+        // Start animacji nie ma prawa ruszyć kadru — patrz restoreCamera.
+        restoreCamera();
         raf = requestAnimationFrame(tick);
     }
 

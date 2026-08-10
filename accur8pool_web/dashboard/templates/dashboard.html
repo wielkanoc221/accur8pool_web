@@ -254,7 +254,11 @@
                             <!-- Nazwa fazy, która akurat trwa. Tło dostaje
                                  kolor tej fazy — ten sam, którym jest
                                  podświetlony tor na scenie 3D. -->
-                            <span class="m3d-phase" id="m3d-phase" hidden></span>
+                            <!-- Bez `hidden`: plakietka ma zawsze zajmować
+                                 swoje miejsce, żeby wejście w pierwszą fazę
+                                 nie przebudowywało paska i nie ruszało kadru
+                                 sceny 3D. Widoczność przełącza klasa. -->
+                            <span class="m3d-phase is-empty" id="m3d-phase"></span>
                         </div>
 
                         <div class="m3d-stage">
