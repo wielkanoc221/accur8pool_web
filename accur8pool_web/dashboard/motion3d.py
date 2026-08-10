@@ -163,11 +163,27 @@ LEVER_MAX = 0.90
 # w danych żadnego pokrycia i bez tego wyszedłby z dzielenia przez zero.
 LEVER_RIDGE = 1e-3
 
-# Ile razy prędkość kątowa policzona z rotation vectora może rozminąć się
-# z żyroskopem, zanim uznamy rotation vector za niezdatny i przejdziemy na
-# całkowanie żyroskopu. 1.0 znaczy „błąd wielkości samego sygnału”, czyli
-# przebieg, w którym nie ma już informacji — patrz build_motion.
-ROT_GYRO_MAX = 1.0
+# Jak bardzo prędkość kątowa z rotation vectora musi zgadzać się KIERUNKIEM
+# ze zmierzoną żyroskopem, żeby dało się jej ufać. Miarą jest cosinus, więc
+# jednostki żyroskopu nie mają tu nic do rzeczy — i to jest istotne, bo
+# miara oparta na różnicy wartości robi się bezużyteczna po kalibracji
+# skali: dopasowanie skali samo z siebie zbliża oba przebiegi i zamiata
+# rozjazd pod dywan. Cosinusa nie da się w ten sposób poprawić.
+#
+# 0.5 to „przynajmniej wskazują tę samą półprzestrzeń”. Próg jest nisko,
+# bo pomyłka w drugą stronę też kosztuje: zdrowy rotation vector jest
+# lepszym źródłem niż całkowany żyroskop, który nie ma odniesienia kursu.
+ROT_GYRO_MIN_COS = 0.5
+
+# Kiedy krok orientacji między próbkami jest PRZESKOKIEM, a nie ruchem.
+# Muszą być spełnione oba warunki naraz, bo osobno każdy myli się w inną
+# stronę: sam kąt karałby szybki zamach przy rzadkim próbkowaniu, a sama
+# krotność mediany — zapis, w którym ręka przez większość czasu stoi.
+#
+# 25° na próbkę to przy 100 Hz 2500°/s, czyli wyraźnie powyżej tego, co
+# nadgarstek potrafi; 8× mediana odsiewa to, co odstaje od reszty zapisu.
+JUMP_RAD = math.radians(25.0)
+JUMP_RATIO = 8.0
 
 # Poniżej tego dopasowania mówimy wprost, że dźwignia tłumaczy zmierzone
 # przyspieszenie słabo — ruch miał zapewne dużą składową przesunięcia,
@@ -291,7 +307,27 @@ def _quat_align_signs(q):
     return q
 
 
-def _quat_w(rv, absw, dt, gyr, znak0):
+def _cos_serii(a, b):
+    """Cosinus między dwiema seriami wektorów, traktowanymi jako jeden
+    długi wektor. Porównuje KIERUNKI, nie wartości.
+
+    Ta niewrażliwość na skalę jest tu celem, a nie efektem ubocznym:
+    miara ma odpowiadać na pytanie „czy te dwa przebiegi opisują ten sam
+    obrót”, niezależnie od tego, w jakich jednostkach zapisano żyroskop.
+    +1 to pełna zgodność, -1 — obrót dokładnie odwrotny.
+    """
+    mianownik = float(np.linalg.norm(a) * np.linalg.norm(b))
+    if mianownik <= 0.0:
+        return 0.0
+    return float(np.einsum("ni,ni->", a, b)) / mianownik
+
+
+def _zgodnosc_z_gyro(q, gyr, t):
+    """Cosinus między prędkością kątową z kwaternionów a zmierzoną."""
+    return _cos_serii(_quat_angular_velocity(_quat_normalize(q), t), gyr)
+
+
+def _quat_w(absw, kierunek, znak0):
     """Czwarta składowa kwaternionu RAZEM ZE ZNAKIEM.
 
     ROTATION_VECTOR niesie tylko trzy składowe, a Android liczy czwartą
@@ -306,48 +342,60 @@ def _quat_w(rv, absw, dt, gyr, znak0):
     i z powrotem, czyli zegarek na animacji wariuje — tym częściej, im
     szybszy ruch, bo tym więcej razy granica zostaje przekroczona.
 
-    ZNAKU NIE DA SIĘ WYBRAĆ PO SĄSIEDZTWIE
-    --------------------------------------
-    Kuszące jest wziąć tego z dwóch kandydatów (±|w|, v), który leży
-    bliżej poprzedniego obrotu. Tyle że dokładnie w punkcie przejścia
-    |w| = 0 i OBAJ kandydaci są tam identyczni — różnica między nimi
-    jest rzędu |w|, czyli znika w tym samym miejscu, w którym trzeba
-    podjąć decyzję. Test bliskości nie przełącza więc znaku nigdy
-    i przejście przez 180° zostaje niezauważone.
+    JAK ROZPOZNAĆ PRZEJŚCIE
+    -----------------------
+    Nie po sąsiedztwie: dokładnie w punkcie przejścia |w| = 0 i obaj
+    kandydaci (±|w|, v) są tam IDENTYCZNI, więc test „który bliżej"
+    nie przełącza znaku nigdy. Rozstrzyga za to zachowanie |w| razem
+    ze znakiem ẇ z żyroskopu (_quat_kierunek_w):
 
-    Znak trzeba PRZEWIDZIEĆ, a nie wybrać. Z kinematyki kwaternionu
+      • |w| MALEJE  → obaj kandydaci zmieniają w w tę samą stronę,
+        nie ma czego rozstrzygać, znak zostaje;
+      • |w| ROŚNIE, a ẇ nadal prowadzi w drugą stronę → w przeszło
+        przez zero i wynurza się po drugiej stronie: ZNAK SIĘ ZMIENIA;
+      • |w| ROŚNIE i ẇ też się odwrócił → to nie było przejście, tylko
+        zawrócenie kąta tuż pod 180°: znak zostaje.
 
-        ẇ = -½ · v · ω
+    PRZEŁĄCZENIE JEST MOŻLIWE TYLKO PRZY ZERZE
+    ------------------------------------------
+    I to jest tu najważniejsze zabezpieczenie. w nie może przeskoczyć
+    przez zero szybciej, niż zmienia się między próbkami, więc w chwili
+    przejścia |w| MUSI być mniejsze od typowego kroku |w| na próbkę.
+    Próg bierze się z samych danych (`prog`), nie z tablicy.
 
-    czyli żyroskop mówi wprost, w którą stronę w zmierza — także wtedy,
-    gdy właśnie przechodzi przez zero. Wystarczy jeden krok Eulera od
-    poprzedniej, już ustalonej wartości: wielkość |w| bierzemy z danych,
-    a z przewidywania tylko ZNAK, więc nic się tu nie całkuje i nic nie
-    dryfuje. Bez żyroskopu zostaje ekstrapolacja liniowa po dwóch
-    poprzednich próbkach, która przez zero przechodzi tak samo.
+    Bez tego warunku pomyłka w znaku ẇ — a ten przy powolnym ruchu jest
+    samym szumem — przełączałaby znak przy dowolnym |w|. Odwrócenie w
+    przy |w| = 0.7 to obrót o 178°, czyli dokładnie ten „okrągły szybki
+    obrót zegarka", który widać było na animacji. Z warunkiem najgorsza
+    możliwa pomyłka to kilka stopni, bo przy |w| ≈ 0 obaj kandydaci
+    opisują prawie ten sam obrót. Ciągłość jest więc zagwarantowana
+    KONSTRUKCYJNIE, a nie dobrą wiarą w kalibrację żyroskopu.
 
     ZNAK PIERWSZEJ PRÓBKI JEST PARAMETREM, NIE ZAŁOŻENIEM
     -----------------------------------------------------
     Śledzenie jest poprawne tylko wtedy, gdy startuje z dobrego znaku.
-    Przy złym starcie nachylenie z żyroskopu jest nadal prawdziwe, ale
-    odnosi się do drugiej gałęzi rozwiązania — przejścia przez zero
-    wypadają wtedy w złych miejscach i seria wychodzi POMIESZANA, a nie
-    po prostu odwrócona. Takiego wyniku nie da się już naprawić żadnym
-    globalnym odwróceniem. Dlatego `znak0` wchodzi tu z zewnątrz:
-    _quat_from_rotvec liczy obie gałęzie i wybiera po pionie.
+    Przy złym starcie przejścia wypadają w złych miejscach i seria
+    wychodzi POMIESZANA, a nie po prostu odwrócona — takiego wyniku nie
+    naprawi już żadne globalne odwrócenie. Dlatego `znak0` wchodzi tu
+    z zewnątrz: _quat_from_rotvec liczy obie gałęzie i wybiera po pionie.
     """
-    n = len(rv)
+    n = len(absw)
     w = np.empty(n)
     w[0] = znak0 * absw[0]
 
+    # Ile |w| zmienia się na próbkę. Dziewięćdziesiąty dziewiąty centyl,
+    # a nie maksimum, żeby pojedynczy zepsuty wiersz nie otwierał okna
+    # na całą skalę. Podwojony, bo w chwili przejścia zmiana rozkłada się
+    # na dwie próbki po obu stronach zera.
+    prog = 2.0 * float(np.percentile(np.abs(np.diff(absw)), 99)) if n > 2 else 1.0
+
     for i in range(1, n):
-        if gyr is not None:
-            pred = w[i - 1] - 0.5 * float(rv[i - 1] @ gyr[i - 1]) * dt[i - 1]
-        elif i >= 2:
-            pred = 2.0 * w[i - 1] - w[i - 2]
-        else:
-            pred = w[i - 1]
-        w[i] = absw[i] if pred >= 0.0 else -absw[i]
+        s = 1.0 if w[i - 1] >= 0.0 else -1.0
+        rosnie = absw[i] > abs(w[i - 1])
+        przy_zerze = absw[i] <= prog and abs(w[i - 1]) <= prog
+        if rosnie and przy_zerze and s * (kierunek[i - 1] + kierunek[i]) < 0.0:
+            s = -s
+        w[i] = s * absw[i]
 
     return w
 
@@ -366,7 +414,7 @@ def _pion_w_swiecie(q, acc):
     return float(np.einsum("nj,nj->n", R[:, 2, :], acc).mean())
 
 
-def _quat_from_rotvec(rv, dt, rw=None, acc=None, gyr=None):
+def _quat_from_rotvec(rv, t, rw=None, acc=None, gyr=None):
     """Kwaternion z ROTATION_VECTOR, razem ze znakiem czwartej składowej.
 
     Kolumna `rotw` niesie ten znak wprost, więc gdy jest wiarygodna,
@@ -377,11 +425,22 @@ def _quat_from_rotvec(rv, dt, rw=None, acc=None, gyr=None):
     tylko wtedy, gdy faktycznie domyka kwaternion do długości 1.
 
     Bez wiarygodnego rotw znak czwartej składowej odtwarza _quat_w, ale
-    ten potrzebuje znaku PIERWSZEJ próbki, którego z samych rot* nie da
-    się odczytać. Liczymy więc obie gałęzie rozwiązania i wybieramy tę,
-    w której grawitacja wychodzi w górę (_pion_w_swiecie). Wyboru nie da
-    się odłożyć na potem: gałęzie różnią się nie tylko globalnym znakiem,
-    ale i miejscami przejść przez zero.
+    ten potrzebuje DWÓCH rzeczy, których z samych rot* nie da się
+    odczytać: znaku pierwszej próbki i zwrotu żyroskopu względem wektora
+    obrotu. Obu nie wolno zgadywać osobnymi heurystykami — poprzednia
+    wersja wykrywała zwrot żyroskopu, porównując go z prowizorycznym
+    kwaternionem zbudowanym przy założeniu w > 0, a to założenie jest
+    fałszywe dokładnie w tych zapisach, o które chodzi (powyżej 180°).
+    Heurystyka odwracała wtedy żyroskop i sama produkowała obrót
+    odwrotny.
+
+    Dlatego liczymy WSZYSTKIE CZTERY kombinacje i wybieramy tę, której
+    prędkość kątowa najlepiej zgadza się kierunkiem ze zmierzoną
+    (_zgodnosc_z_gyro). To jedno kryterium rozstrzyga oba pytania naraz,
+    jest odporne na jednostki żyroskopu i nie opiera się na żadnym
+    założeniu o zakresie kąta. Wyboru nie da się odłożyć na potem:
+    gałęzie różnią się nie tylko globalnym znakiem, ale i miejscami
+    przejść przez zero.
 
     Zwraca (kwaterniony, opis pochodzenia czwartej składowej).
     """
@@ -404,16 +463,28 @@ def _quat_from_rotvec(rv, dt, rw=None, acc=None, gyr=None):
     if rw is not None and np.mean(np.abs(np.sqrt(n2 + rw * rw) - 1.0) < 0.05) > 0.9:
         q = np.column_stack([rw, rv])
         opis = "rotw z pliku"
+    elif gyr is None:
+        # Bez żyroskopu nie ma czym rozpoznać przejścia przez 180°.
+        # Zostaje założenie Androida — gorsze, ale przynajmniej ciągłe.
+        # Sam kierunek obrotu rozstrzyga jeszcze pion, jeśli jest z czego.
+        q = np.column_stack([absw, rv])
+        opis = "w = +sqrt(1-|v|²) — bez żyroskopu nie ma jak wykryć przejścia przez 180°"
+        if acc is not None:
+            odwrotny = q * np.array([-1.0, 1.0, 1.0, 1.0])
+            if _pion_w_swiecie(odwrotny, acc) > _pion_w_swiecie(q, acc):
+                q = odwrotny
+                opis += ", seria odwrócona wg pionu"
     else:
-        galezie = [np.column_stack([_quat_w(rv, absw, dt, gyr, s), rv])
-                   for s in (1.0, -1.0)]
-        if acc is None:
-            # Nie ma czym rozstrzygnąć — zostaje założenie Androida (w > 0).
-            q = galezie[0]
-            opis = "znak w z kinematyki, bez potwierdzenia pionem"
-        else:
-            q = max(galezie, key=lambda kandydat: _pion_w_swiecie(kandydat, acc))
-            opis = "znak w z kinematyki, gałąź wybrana wg pionu"
+        # ẇ = -½·v·ω. Bierzemy stąd wyłącznie ZNAK, nigdy wartości —
+        # dzięki temu jednostki żyroskopu i skala osi czasu nie mają tu
+        # nic do rzeczy. `zwrot` przechodzi przez wybór gałęzi razem ze
+        # znakiem pierwszej próbki.
+        kierunek = -np.einsum("ni,ni->n", rv, gyr)
+        galezie = [np.column_stack([_quat_w(absw, zwrot * kierunek, znak0), rv])
+                   for zwrot in (1.0, -1.0) for znak0 in (1.0, -1.0)]
+        q = max(galezie, key=lambda kandydat: _zgodnosc_z_gyro(kandydat, gyr, t))
+        opis = (f"znak w z kinematyki, gałąź wybrana wg żyroskopu "
+                f"(zgodność {_zgodnosc_z_gyro(q, gyr, t):.2f})")
 
     if zepsute.any():
         opis += f", {int(zepsute.sum())} próbek poza sferą jednostkową"
@@ -449,6 +520,56 @@ def _smooth_quat(q):
         return q, False             # czujnik nadaje w pełnym tempie
 
     return _quat_normalize(_boxcar(q, max(3, okres))), True
+
+
+def _kalibruj_gyro(gyr, omega_q):
+    """Skaluje żyroskop tak, żeby pasował do prędkości kątowej z orientacji.
+
+    Nie zakładamy, że kolumny gyr* są w radianach na sekundę. Zapisy
+    z zegarka bywają w stopniach, bywają w surowych jednostkach czujnika,
+    a nazwa kolumny o tym nie mówi. Skala nie ma wpływu na odtworzenie
+    ORIENTACJI (tam liczy się sam znak ẇ), ale wchodzi wprost do dwóch
+    innych miejsc i psuje je po cichu:
+
+      • model dźwigni liczy przyspieszenie jako ω̇ i ω² razy ramię, więc
+        żyroskop w stopniach zaniża wyznaczone ramię ponad trzy tysiące
+        razy i `path_cm` przestaje cokolwiek znaczyć;
+      • awaryjne całkowanie żyroskopu kręci wtedy zegarkiem kilkadziesiąt
+        razy za szybko — czyli produkuje dokładnie tę usterkę, którą
+        miało naprawiać.
+
+    Odniesieniem jest prędkość kątowa policzona z kwaternionów, która
+    jednostki ma z definicji dobre. Wzmocnienie to MEDIANA ilorazów
+    z poszczególnych próbek, a nie wynik najmniejszych kwadratów: gdy
+    wektor obrotu jest zaszumiony, jego pochodna ma pojedyncze wielkie
+    wyskoki, a te ciągną średnią za sobą — mediana ich nie widzi. Liczymy
+    ją tylko na próbkach, w których ręka faktycznie się obraca, bo przy
+    |ω| bliskim zera iloraz jest ilorazem dwóch szumów.
+
+    Zwraca (przeskalowany żyroskop, wzmocnienie).
+    """
+    moc = (gyr * gyr).sum(axis=1)
+    istotne = moc > max(float(np.median(moc)), 1e-12)
+    if not istotne.any():
+        return gyr, 1.0
+
+    ilorazy = np.einsum("ni,ni->n", omega_q[istotne], gyr[istotne]) / moc[istotne]
+    wzmocnienie = float(np.median(ilorazy))
+    if not math.isfinite(wzmocnienie) or wzmocnienie <= 0.0:
+        return gyr, 1.0
+    return gyr * wzmocnienie, wzmocnienie
+
+
+def _quat_kroki(q):
+    """Kąt obrotu między sąsiednimi próbkami [rad].
+
+    Liczony z |iloczynu skalarnego|, bo q i -q to ten sam obrót. To jest
+    miara, w której widać NIECIĄGŁOŚĆ animacji: prawdziwy ruch nadgarstka
+    daje kroki rzędu ułamka stopnia, a każdy przeskok orientacji wystaje
+    z tego rozkładu o dwa rzędy wielkości.
+    """
+    dot = np.abs(np.einsum("ni,ni->n", q[1:], q[:-1]))
+    return 2.0 * np.arccos(np.clip(dot, 0.0, 1.0))
 
 
 def _quat_angular_velocity(q, t):
@@ -1007,12 +1128,25 @@ def build_motion(prep, lo, hi, phases=(), fps=NO_FPS_LIMIT, smooth=True,
     acc = prep["acc"][wyc] if prep["acc"] is not None else None
 
     wygladzona = False
-    niezgodnosc = None
+    zgodnosc = None
+    skoki = 0
+    wzmocnienie = 1.0
     if prep["rot"] is not None:
         rw = prep["rotw"][wyc] if prep["rotw"] is not None else None
-        q, opis_w = _quat_from_rotvec(prep["rot"][wyc], dt, rw, acc, gyr)
+        q, opis_w = _quat_from_rotvec(prep["rot"][wyc], t, rw, acc, gyr)
         if smooth:
             q, wygladzona = _smooth_quat(q)
+
+        # Ciągłość, mierzona wprost na gotowej serii.
+        #
+        # Wszystkie zabezpieczenia wyżej pilnują, żeby REKONSTRUKCJA nie
+        # wprowadziła przeskoku. Ten test sprawdza WYNIK i łapie też to,
+        # czego nie przewidzieliśmy: uszkodzony wiersz w pliku, zgubioną
+        # próbkę, wektor obrotu z innego układu. Przeskok w orientacji
+        # jest tym, co widać jako szarpnięcie, więc mierzymy dokładnie to.
+        kroki = _quat_kroki(q)
+        prog_skoku = max(JUMP_RAD, JUMP_RATIO * float(np.median(kroki)))
+        skoki = int((kroki > prog_skoku).sum())
 
         # Rotation vector kontra żyroskop.
         #
@@ -1021,27 +1155,35 @@ def build_motion(prep, lo, hi, phases=(), fps=NO_FPS_LIMIT, smooth=True,
         # daje się policzyć na dwa niezależne sposoby: z pochodnej
         # kwaternionów i wprost z żyroskopu. Na zdrowym zapisie wychodzą
         # praktycznie te same przebiegi. Gdy rotation vector przeskakuje —
-        # bo przeszedł przez filtr dolnoprzepustowy, bo w zgubiło znak,
-        # bo plik jest uszkodzony — jego pochodna staje się grzebieniem
-        # igieł, a żyroskop zostaje gładki. Wystarczy porównać.
+        # bo przeszedł przez filtr dolnoprzepustowy, bo plik jest
+        # uszkodzony — jego pochodna staje się grzebieniem igieł,
+        # a żyroskop zostaje gładki. Wystarczy porównać.
         #
-        # Próg jest wysoko (błąd wielkości samego sygnału), bo pomyłka
-        # w drugą stronę też kosztuje: zdrowy rotation vector jest lepszym
-        # źródłem niż całkowany żyroskop, który nie ma odniesienia kursu.
+        # Zgodność mierzymy cosinusem, więc kalibracja skali nie ma na nią
+        # wpływu — i dlatego wolno na jej podstawie zdecydować, czy tę
+        # kalibrację w ogóle przyjąć. Wzmocnienie liczy się z wektora
+        # obrotu; gdy ten jest szumem, dopasowałoby się do szumu i po
+        # cichu spowolniło całą animację. Przyjmujemy je więc tylko wtedy,
+        # gdy wektor obrotu okazał się wiarygodny.
         if gyr is not None:
             omega_q = _boxcar(_quat_angular_velocity(q, t), okno)
-            skala = float(np.sqrt((gyr ** 2).sum(axis=1).mean()))
-            if skala > 1e-6:
-                niezgodnosc = float(
-                    np.sqrt(((omega_q - gyr) ** 2).sum(axis=1).mean()) / skala)
+            zgodnosc = _cos_serii(omega_q, gyr)
+            if zgodnosc >= ROT_GYRO_MIN_COS:
+                gyr, wzmocnienie = _kalibruj_gyro(gyr, omega_q)
 
-        if niezgodnosc is not None and niezgodnosc > ROT_GYRO_MAX:
+        zle = (zgodnosc is not None and zgodnosc < ROT_GYRO_MIN_COS) or skoki
+        if zle and gyr is not None:
+            # Całkowanie żyroskopu jest z definicji ciągłe — nie ma tam
+            # żadnej decyzji per próbka, która mogłaby przeskoczyć. Kurs
+            # bez odniesienia będzie powoli odpływał, ale na odcinku
+            # jednego uderzenia to kilka stopni, a przeskok o 180° psuje
+            # animację od razu.
             q = _integrate_gyro(gyr, dt, acc)
+            powod = (f"{skoki} × przeskok orientacji" if skoki
+                     else f"kierunek niezgodny z żyroskopem (cos {zgodnosc:.2f})")
+            opis_orientacji = (f"rotation vector nieciągły ({powod}) — "
+                               f"orientacja całkowana z żyroskopu")
             source = "gyro"
-            opis_orientacji = (
-                f"rotation vector rozjeżdża się z żyroskopem "
-                f"({niezgodnosc:.1f}× sygnał) — orientacja całkowana "
-                f"z żyroskopu")
             wygladzona = False
         else:
             source = "fused" if gyr is not None else "rot"
@@ -1209,12 +1351,21 @@ def build_motion(prep, lo, hi, phases=(), fps=NO_FPS_LIMIT, smooth=True,
             "sample_rate": round(fps_natywne, 2),
             "stride": krok,
             "smoothed": wygladzona,
-            # Rozjazd rotation vectora z żyroskopem, w wielokrotnościach
-            # samego sygnału. None = nie było czym porównać. Powyżej
-            # ROT_GYRO_MAX orientacja poszła z żyroskopu — bez tej liczby
-            # nie da się zauważyć, że plik ma zepsuty wektor obrotu.
-            "rot_vs_gyro": (round(niezgodnosc, 3)
-                            if niezgodnosc is not None else None),
+            # Zgodność kierunku obrotu z żyroskopem (cosinus, 1.0 =
+            # idealna). None = nie było czym porównać. Poniżej
+            # ROT_GYRO_MIN_COS orientacja poszła z żyroskopu — bez tej
+            # liczby nie da się zauważyć, że plik ma zepsuty wektor obrotu.
+            "rot_gyro_cos": (round(zgodnosc, 3)
+                             if zgodnosc is not None else None),
+            # Ile przeskoków orientacji miał rotation vector, ZANIM
+            # zdecydowaliśmy, co z nim zrobić. Zero znaczy, że animacja
+            # jest ciągła z samych danych, a nie dzięki ratunkowi.
+            "jumps": skoki,
+            # Wzmocnienie, jakim trzeba było przeskalować żyroskop, żeby
+            # zgadzał się z orientacją. 1.0 = kolumny gyr* są w rad/s.
+            # Wyraźnie inna wartość znaczy, że zapis ma inne jednostki —
+            # a od tego zależy ramię dźwigni i cała droga nadgarstka.
+            "gyro_gain": round(wzmocnienie, 4),
             # Zastrzeżenie o pochodzeniu pliku dokłada widok, gdy musiał
             # sięgnąć po wersję przygotowaną zamiast surowej.
             "source_file": None,

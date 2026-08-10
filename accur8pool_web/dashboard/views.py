@@ -134,7 +134,7 @@ def _prepare_uploaded_file(user, raw_path, filename):
     kolumn, więc wystarczy to odnotować w logu i w odpowiedzi.
     """
     try:
-        from accur8pool_web.utils.data_processing.prepare_raw_data import prepare_raw_file_and_save
+        from .utils.data_processing.prepare_raw_data import prepare_raw_file_and_save
 
         return prepare_raw_file_and_save(raw_path, _user_prepared_dir(user), filename)
     except Exception:
@@ -537,7 +537,7 @@ def api_dataset_motion3d(request, filename):
             ("hi", segment.end),
             ("phases", _phase_tuples(segment)),
             ("fps", clamp(num("fps", MIN_FPS), MIN_FPS, MAX_FPS)
-             if request.GET.get("fps") else motion3d.NO_FPS_LIMIT),
+            if request.GET.get("fps") else motion3d.NO_FPS_LIMIT),
             ("smooth", flag("smooth", True)),
             ("watch_scale", clamp(num("watch", 1.0), 0.2, 20.0)),
         )
