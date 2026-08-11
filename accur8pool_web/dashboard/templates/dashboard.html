@@ -200,10 +200,47 @@
                                     aria-label="Uderzenie do animacji" disabled>
                                 <option value="">Ładowanie segmentów…</option>
                             </select>
+                            <!-- Obrót sceny wokół pojedynczej osi. Myszą
+                                 wychodzi zawsze obrót wokół dwóch osi
+                                 naraz, więc dwóch uderzeń nie da się nią
+                                 ustawić w tym samym ujęciu. Te same kroki
+                                 dają strzałki na klawiaturze (↑↓ = oś X,
+                                 ←→ = oś Y, +Shift = oś Z). Działa też
+                                 w trakcie odtwarzania. -->
+                            <div class="m3d-rotate" role="group"
+                                 aria-label="Obrót sceny">
+                                <span class="m3d-rotate-axis" aria-hidden="true">X</span>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="x" data-rot-deg="-15"
+                                        title="Obrót wokół osi X, widok w górę (↑)"
+                                        aria-label="Obróć wokół osi X w górę">▲</button>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="x" data-rot-deg="15"
+                                        title="Obrót wokół osi X, widok w dół (↓)"
+                                        aria-label="Obróć wokół osi X w dół">▼</button>
+                                <span class="m3d-rotate-axis" aria-hidden="true">Y</span>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="y" data-rot-deg="-15"
+                                        title="Obrót wokół osi Y w lewo (←)"
+                                        aria-label="Obróć wokół osi Y w lewo">◀</button>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="y" data-rot-deg="15"
+                                        title="Obrót wokół osi Y w prawo (→)"
+                                        aria-label="Obróć wokół osi Y w prawo">▶</button>
+                                <span class="m3d-rotate-axis" aria-hidden="true">Z</span>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="z" data-rot-deg="-15"
+                                        title="Obrót osi X i Y wokół pionu, w lewo (Shift + ←)"
+                                        aria-label="Obróć wokół osi Z w lewo">↺</button>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="z" data-rot-deg="15"
+                                        title="Obrót osi X i Y wokół pionu, w prawo (Shift + →)"
+                                        aria-label="Obróć wokół osi Z w prawo">↻</button>
+                            </div>
                             <!-- Obrót i przybliżenie sceny zostają takie,
                                  jakie ustawił widz — także po zmianie
-                                 segmentu. To jest jedyna droga powrotu
-                                 do widoku domyślnego. -->
+                                 segmentu i w trakcie animacji. To jest
+                                 jedyna droga powrotu do widoku domyślnego. -->
                             <button type="button" class="btn btn-ghost btn-sm"
                                     id="m3d-reset-view">
                                 <span aria-hidden="true">🔍</span>

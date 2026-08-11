@@ -28,9 +28,11 @@
    KAMERA NALEŻY DO WIDZA, NIE DO DANYCH
    -------------------------------------
    Obrót i przybliżenie sceny są pamiętane po stronie przeglądarki
-   i przeżywają podmianę segmentu, przeliczenie po zmianie faz, powrót
-   na zakładkę oraz przeładowanie strony. Kamera z layoutu serwera jest
-   tylko ustawieniem startowym dla kogoś, kto jeszcze nic nie wybrał.
+   i przeżywają ODTWARZANIE, podmianę segmentu, przeliczenie po zmianie
+   faz, powrót na zakładkę oraz przeładowanie strony. Kamera z layoutu
+   serwera jest tylko ustawieniem startowym dla kogoś, kto jeszcze nic
+   nie wybrał. Scenę da się obracać myszą, przyciskami (osobno wokół
+   osi X, Y i Z) oraz strzałkami — także w trakcie animacji.
    Szczegóły w sekcji KAMERA niżej.
    ============================================================ */
 
@@ -48,6 +50,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         source: document.getElementById('m3d-source'),
         resetView: document.getElementById('m3d-reset-view'),
+        rotate: Array.prototype.slice.call(document.querySelectorAll('[data-rot-axis]')),
         play: document.getElementById('m3d-play'),
         playLabel: document.getElementById('m3d-play-label'),
         loop: document.getElementById('m3d-loop'),
@@ -178,6 +181,19 @@ document.addEventListener('DOMContentLoaded', function () {
     //  Plotly.react, ale nie przeżywa przeładowania strony ani sytuacji,
     //  w której wykres trzeba postawić od nowa (Plotly.newPlot).
     //  Dlatego kamerę pamiętamy tutaj i wstawiamy do layoutu sami.
+    //
+    //  ODTWARZANIE NIE MOŻE COFAĆ WIDOKU
+    //  ---------------------------------
+    //  Każda klatka animacji to Plotly.restyle, a restyle stawia scenę
+    //  WebGL od nowa i ustawia w niej kamerę z `layout.scene.camera`.
+    //  Plotly wpisuje tam wybór widza dopiero po ZAKOŃCZENIU gestu —
+    //  po puszczeniu przycisku myszy albo po ustaniu przewijania. Przez
+    //  cały czas trwania gestu w layoucie siedzi więc widok SPRZED
+    //  obrotu, a odtwarzanie przywraca go sześćdziesiąt razy na sekundę:
+    //  scena szarpie się z powrotem i ani obrócić, ani przybliżyć jej
+    //  podczas animacji się nie da. Dlatego przed każdą klatką bierzemy
+    //  kamerę prosto ze sceny WebGL i sami wpisujemy ją do layoutu —
+    //  patrz pinCamera().
     // ============================================================
 
     const CAMERA_KEY = 'a8.motion3d.camera';
@@ -186,6 +202,7 @@ document.addEventListener('DOMContentLoaded', function () {
     let cameraDefault = null;  // widok domyślny z pierwszej sceny — do resetu
     let cameraHooked = false;  // czy nasłuch na plotly_relayout już wisi
     let applyingCamera = false;
+    let cameraSavedAt = 0;     // kiedy ostatnio poszedł zapis do sessionStorage
 
     function readCamera() {
         try {
@@ -198,6 +215,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
     function saveCamera(cam) {
         camera = cam;
+        cameraSavedAt = Date.now();
         try {
             sessionStorage.setItem(CAMERA_KEY, JSON.stringify(cam));
         } catch (err) {
@@ -207,6 +225,57 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     camera = readCamera();
+
+    /** Kamera prosto ze sceny WebGL — jedyne źródło, które zna widok
+     *  W TRAKCIE obracania i przybliżania. `plot.layout` dowiaduje się
+     *  o nim dopiero po zakończeniu gestu. */
+    function liveCamera() {
+        const full = els.plot._fullLayout;
+        const gl = full && full.scene && full.scene._scene;
+        if (!gl || typeof gl.getCamera !== 'function') return null;
+        try {
+            return gl.getCamera();
+        } catch (err) {
+            return null;   // wewnętrzne API Plotly — nie zakładamy, że jest
+        }
+    }
+
+    /** Przybija bieżący widok do layoutu wykresu PRZED odrysowaniem klatki.
+     *
+     *  To jest miejsce, które sprawia, że animacja nie kasuje obrotu ani
+     *  przybliżenia — powód opisany w nagłówku sekcji. Wywoływane raz na
+     *  klatkę, więc wszystko tutaj musi być tanie: jedno odczytanie
+     *  macierzy kamery i dwa przypisania. Do sessionStorage schodzimy
+     *  najwyżej dwa razy na sekundę, bo serializacja przy każdej klatce
+     *  byłaby czystą stratą. */
+    function pinCamera() {
+        // Gdyby wewnętrzne API Plotly kiedyś zniknęło, zostaje ostatni
+        // widok zapamiętany na zdarzeniu relayout — mniej dokładny (nie
+        // zna gestu w trakcie), ale wciąż lepszy niż widok domyślny.
+        const zeSceny = liveCamera();
+        const cam = zeSceny || camera;
+        if (!cam) return;
+
+        const gd = els.plot;
+        if (gd.layout && gd.layout.scene) gd.layout.scene.camera = cam;
+        if (gd._fullLayout && gd._fullLayout.scene) gd._fullLayout.scene.camera = cam;
+
+        if (!zeSceny) return;
+        const zmiana = !sameCamera(cam, camera);
+        camera = cam;
+        if (zmiana && Date.now() - cameraSavedAt > 500) saveCamera(cam);
+    }
+
+    function sameCamera(a, b) {
+        if (!a || !b) return false;
+        const czesci = ['eye', 'up', 'center'];
+        for (let i = 0; i < czesci.length; i++) {
+            const p = a[czesci[i]], q = b[czesci[i]];
+            if (!p !== !q) return false;
+            if (p && q && (p.x !== q.x || p.y !== q.y || p.z !== q.z)) return false;
+        }
+        return true;
+    }
 
     /** Layout sceny z kamerą użytkownika w miejscu domyślnej. */
     function layoutWithCamera(layout) {
@@ -236,19 +305,79 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    function resetCamera() {
-        camera = null;
-        try { sessionStorage.removeItem(CAMERA_KEY); } catch (err) { /* jw. */ }
-        if (!plotted || !cameraDefault) return;
-
-        // Reset idzie przez relayout, a nie przez podanie kamery w react:
-        // przy niezmienionym `uirevision` Plotly celowo IGNORUJE kamerę
-        // z nowego layoutu, żeby nie kasować tego, co ustawił widz.
-        // Relayout jest jawną zmianą i wygrywa — o to nam tutaj chodzi.
+    /** Wstawia kamerę do sceny.
+     *
+     *  Idzie przez relayout, a nie przez podanie kamery w react: przy
+     *  niezmienionym `uirevision` Plotly celowo IGNORUJE kamerę z nowego
+     *  layoutu, żeby nie kasować tego, co ustawił widz. Relayout jest
+     *  jawną zmianą i wygrywa — o to nam tutaj chodzi. */
+    function applyCamera(cam) {
+        if (!plotted || !cam) return;
         applyingCamera = true;
-        Promise.resolve(Plotly.relayout(els.plot, { 'scene.camera': cameraDefault }))
+        Promise.resolve(Plotly.relayout(els.plot, { 'scene.camera': cam }))
             .catch(err => console.error('Plotly 3D:', err))
             .then(function () { applyingCamera = false; });
+    }
+
+    function resetCamera() {
+        camera = null;
+        cameraSavedAt = 0;
+        try { sessionStorage.removeItem(CAMERA_KEY); } catch (err) { /* jw. */ }
+        applyCamera(cameraDefault);
+    }
+
+    // ------------------------------------------------------------
+    //  OBRÓT SCENY WOKÓŁ OSI X / Y / Z
+    //
+    //  Myszą scena obraca się swobodnie (`dragmode: orbit`), ale „obróć
+    //  o kawałek wokół osi Y” myszą się nie da — wychodzi zawsze obrót
+    //  wokół dwóch osi naraz. Przyciski i strzałki na klawiaturze robią
+    //  dokładnie jeden obrót wokół dokładnie jednej osi, więc dwa
+    //  uderzenia da się ustawić w tym samym ujęciu.
+    // ------------------------------------------------------------
+
+    const ROT_STEP = 15;                  // stopni na jedno kliknięcie
+    const DEG = Math.PI / 180;
+
+    /** Obrót punktu wokół osi UKŁADU SCENY (nie osi ekranu). */
+    function spin(axis, p, kat) {
+        const c = Math.cos(kat), s = Math.sin(kat);
+        if (axis === 'x') return { x: p.x, y: p.y * c - p.z * s, z: p.y * s + p.z * c };
+        if (axis === 'y') return { x: p.x * c + p.z * s, y: p.y, z: -p.x * s + p.z * c };
+        return { x: p.x * c - p.y * s, y: p.x * s + p.y * c, z: p.z };
+    }
+
+    function rotateView(axis, stopnie) {
+        if (!plotted) return;
+
+        // Podstawą jest widok Z EKRANU, a nie ostatnio zapisany: w trakcie
+        // odtwarzania i zaraz po obrocie myszą to nie zawsze to samo.
+        const cam = liveCamera() || camera || cameraDefault;
+        if (!cam || !cam.eye) return;
+
+        const center = cam.center || { x: 0, y: 0, z: 0 };
+        const up = cam.up || { x: 0, y: 0, z: 1 };
+        const kat = stopnie * DEG;
+
+        // Obracamy WEKTOR OD ŚRODKA SCENY DO OKA, a nie samo oko — inaczej
+        // po przesunięciu sceny (pan) obrót wyrzuciłby ją poza kadr.
+        const v = spin(axis, {
+            x: cam.eye.x - center.x,
+            y: cam.eye.y - center.y,
+            z: cam.eye.z - center.z
+        }, kat);
+
+        const nowa = Object.assign({}, cam, {
+            center: center,
+            eye: { x: center.x + v.x, y: center.y + v.y, z: center.z + v.z },
+            // Pion obraca się razem z okiem. Bez tego po kilku krokach
+            // scena zaczyna się przewracać, bo kamera patrzy z góry,
+            // a „górę” ma nadal tam, gdzie była na starcie.
+            up: spin(axis, up, kat)
+        });
+
+        saveCamera(nowa);
+        applyCamera(nowa);
     }
 
     // ============================================================
@@ -402,7 +531,12 @@ document.addEventListener('DOMContentLoaded', function () {
             ? Plotly.react(els.plot, body.figure.data, layout)
             : Plotly.newPlot(els.plot, body.figure.data, layout, {
                   responsive: true,
-                  displayModeBar: false
+                  displayModeBar: false,
+                  // Kółko myszy przybliża scenę. Domyślnie Plotly włącza to
+                  // dla 3D samo, ale pasek narzędzi jest schowany, więc
+                  // zostaje jedyną drogą do przybliżenia — nie zostawiamy
+                  // tego domyślnym ustawieniom.
+                  scrollZoom: true
               });
 
         rysuj.then(function () {
@@ -494,6 +628,11 @@ document.addEventListener('DOMContentLoaded', function () {
             ty.push(p.pos[i][1]);
             tz.push(p.pos[i][2]);
         }
+
+        // Widok widza wchodzi do layoutu ZANIM restyle postawi scenę od
+        // nowa — inaczej ta sama przebudowa cofnęłaby obrót i przybliżenie
+        // do stanu sprzed gestu. Szczegóły w sekcji KAMERA.
+        pinCamera();
 
         // Jedno wywołanie na całą klatkę. Plotly przy każdym restyle
         // przebudowuje scenę WebGL, więc pięć osobnych wywołań to pięć
@@ -707,6 +846,12 @@ document.addEventListener('DOMContentLoaded', function () {
         els.resetView.addEventListener('click', resetCamera);
     }
 
+    els.rotate.forEach(function (btn) {
+        btn.addEventListener('click', function () {
+            rotateView(btn.dataset.rotAxis, parseFloat(btn.dataset.rotDeg));
+        });
+    });
+
     // Lista uderzeń w rozwijanym wyborze. Bierze się z segments.js, więc
     // nie ma drugiego żądania o te same dane.
     if (window.a8Segments && els.source) {
@@ -743,19 +888,42 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 
-    // Spacja steruje odtwarzaniem, ale tylko gdy widać scenę i gdy nie
-    // trwa pisanie w polu formularza.
+    // Spacja steruje odtwarzaniem, strzałki obracają scenę — ale tylko
+    // gdy widać scenę i gdy nie trwa pisanie w polu formularza.
+    // Strzałki wokół osi: ↑↓ = oś X, ←→ = oś Y, z Shiftem ←→ = oś Z.
+    const KLAWISZE_OBROTU = {
+        ArrowUp:    ['x', -ROT_STEP],
+        ArrowDown:  ['x',  ROT_STEP],
+        ArrowLeft:  ['y', -ROT_STEP],
+        ArrowRight: ['y',  ROT_STEP]
+    };
+
     document.addEventListener('keydown', function (e) {
-        if (e.code !== 'Space' || activeView !== '3d' || !scene) return;
-        // BUTTON też jest wykluczony: spacja na ustawionym focusie i tak
-        // wywołuje kliknięcie, więc obsłużenie jej tutaj przełączałoby
-        // odtwarzanie dwa razy i wracało do stanu wyjściowego.
+        if (activeView !== '3d' || !scene) return;
+
         const cel = e.target;
         if (cel && (cel.tagName === 'INPUT' || cel.tagName === 'SELECT' ||
-                    cel.tagName === 'BUTTON' || cel.tagName === 'TEXTAREA' ||
-                    cel.isContentEditable)) return;
+                    cel.tagName === 'TEXTAREA' || cel.isContentEditable)) return;
+
+        if (e.code === 'Space') {
+            // Tu BUTTON jest wykluczony dodatkowo: spacja na ustawionym
+            // focusie i tak wywołuje kliknięcie, więc obsłużenie jej
+            // jeszcze raz przełączałoby odtwarzanie dwukrotnie i wracało
+            // do stanu wyjściowego. Strzałki takiego problemu nie mają
+            // i celowo działają także po kliknięciu w przycisk obrotu.
+            if (cel && cel.tagName === 'BUTTON') return;
+            e.preventDefault();
+            playing ? pause() : play();
+            return;
+        }
+
+        const obrot = KLAWISZE_OBROTU[e.key];
+        if (!obrot || e.ctrlKey || e.altKey || e.metaKey) return;
         e.preventDefault();
-        playing ? pause() : play();
+        // Shift + strzałka w bok kręci sceną wokół pionu — to jest obrót
+        // „samych osi X i Y”, bez pochylania widoku.
+        const osZ = e.shiftKey && obrot[0] === 'y';
+        rotateView(osZ ? 'z' : obrot[0], obrot[1]);
     });
 
     // Wyjście z karty zatrzymuje animację — inaczej wraca się do niej
