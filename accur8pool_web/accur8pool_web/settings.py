@@ -41,9 +41,14 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Dane użytkowników leżą w dwóch równoległych drzewach o tej samej
 # strukturze (<dir>/<user_id>/<filename>.csv):
-#   raw_data      — plik dokładnie taki, jaki przyszedł z uploadu,
+#   raw_data      — plik dokładnie taki, jaki przyszedł z uploadu; kopia
+#                   źródłowa, z której da się przygotowanie powtórzyć,
 #   prepared_data — ten sam plik po transform_raw_df (filtry, magnitudy,
 #                   jerk, roll/pitch), liczony w trakcie uploadu.
+# APLIKACJA CZYTA WYŁĄCZNIE Z prepared_data. Upload, któremu nie udało się
+# przygotować danych, jest odrzucany i nie zostawia po sobie ani pliku
+# w raw_data, ani wpisu w bazie — nie ma więc zestawów „widocznych, ale
+# nie do otwarcia”.
 # Ta sama nazwa pliku w obu katalogach wiąże wersję surową z przygotowaną,
 # więc nie trzeba trzymać drugiej ścieżki w bazie.
 ACCUR8POOL_DATA_DIR = BASE_DIR / "new_data" / "raw_data"

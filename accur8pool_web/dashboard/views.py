@@ -22,14 +22,16 @@ from .models import Dataset, Segment, SubSegment
 
 logger = logging.getLogger(__name__)
 
-# Surowe pliki tak, jak przyszły z uploadu.
+# Surowe pliki tak, jak przyszły z uploadu. To jest WYŁĄCZNIE wejście dla
+# przygotowania danych — żaden widok już z tego drzewa nie czyta.
 DATA_DIR = Path(
     getattr(settings, "ACCUR8POOL_DATA_DIR", Path(settings.BASE_DIR) / "new_data" / "raw_data")
 )
 
 # Te same pliki po transform_raw_df — pod tą samą nazwą i tym samym
-# <user_id>, tyle że w drugim drzewie. Wykresy i animacja czytają nadal
-# z DATA_DIR; prepared_data jest wejściem dla dalszego przetwarzania.
+# <user_id>, tyle że w drugim drzewie. TO JEST JEDYNE ŹRÓDŁO DANYCH dla
+# aplikacji: wykres 2D, doczytywanie zakresów, animacja 3D i dalsze
+# przetwarzanie widzą dokładnie ten sam plik.
 PREPARED_DATA_DIR = Path(
     getattr(settings, "ACCUR8POOL_PREPARED_DATA_DIR",
             Path(settings.BASE_DIR) / "new_data" / "prepared_data")
@@ -66,89 +68,109 @@ def _user_prepared_dir(user):
 
 
 def _dataset_path(user, dataset):
-    """Plik, z którego czyta dashboard: przygotowany, a w zapasie surowy.
+    """JEDYNY plik, z którego czyta aplikacja: wersja przygotowana.
 
-    Pierwszeństwo ma prepared_data — tam sygnały są po filtrze
-    dolnoprzepustowym i doszły kolumny pochodne (magnitudy, jerk,
-    roll/pitch), więc wykres i animacja pokazują to samo, na czym pracuje
-    dalsze przetwarzanie.
+    Nie ma tu zapasu na plik surowy — i to jest cała zmiana względem
+    poprzedniej wersji. Wykres 2D, doczytywanie zakresów i animacja 3D
+    dostają dokładnie ten sam plik, więc numer wiersza znaczy wszędzie to
+    samo, a segment zaznaczony na wykresie wskazuje w animacji ten sam
+    fragment ruchu. Przy dwóch źródłach o różnej liczbie kolumn i (przy
+    plikach niepełnych) różnej długości nie było to zagwarantowane.
 
-    Surowy plik zostaje jako zapas dla zestawów wgranych, zanim
-    prepared_data w ogóle istniało, oraz dla tych, których nie dało się
-    przetworzyć (np. zapis bez magnetometru). Dzięki temu brak wersji
-    przygotowanej degraduje widok do poprzedniego zachowania, zamiast
-    zamieniać go w błąd 404.
+    Zestaw bez wersji przygotowanej nie jest w ogóle pokazywany — patrz
+    _resolve_dataset i upload_dataset — więc ta ścieżka praktycznie
+    zawsze istnieje. Wołający i tak sprawdzają .exists(), bo plik może
+    zniknąć z dysku między żądaniami.
 
-    UWAGA: animacja 3D ma odwrotne pierwszeństwo i czyta surowy plik —
-    patrz _dataset_raw_path. Filtrowanie, które pomaga wykresowi 2D,
-    psuje wektor obrotu.
+    Rekonstrukcja 3D też czyta stąd. Było to możliwe dopiero po tym, jak
+    transform_raw_df przestał filtrować rot* — filtr rozjeżdżał składowe
+    kwaternionu z warunkiem |q| = 1 i psuł orientację (szczegóły przy
+    COLUMNS_TO_FILTER_5_CUT_OFF w prepare_raw_data).
     """
-    prepared_path = _user_prepared_dir(user) / dataset.filename
-    if prepared_path.exists():
-        return prepared_path
-    return _user_dir(user) / dataset.filename
+    return _user_prepared_dir(user) / dataset.filename
 
 
-def _dataset_raw_path(user, dataset):
-    """Plik, z którego czyta ANIMACJA 3D: surowy, a w zapasie przygotowany.
+def _prepare_raw_data_module():
+    """Moduł z transformacją danych, spod TEJ nazwy, pod którą da się go
+    zaimportować.
 
-    Odwrotnie niż _dataset_path — i to jest celowe. Rekonstrukcja
-    orientacji potrzebuje wektora obrotu DOKŁADNIE takiego, jaki wystawił
-    czujnik, a transform_raw_df robi z nim trzy rzeczy naraz, z których
-    każda osobno wystarczy, żeby animacja zaczęła wariować:
+    Ten sam katalog jest widoczny pod dwiema nazwami, zależnie od tego,
+    co trafiło na sys.path: `utils.data_processing…`, gdy uruchamia się
+    przez manage.py (katalog projektu jest wtedy korzeniem — stąd biorą
+    się nazwy aplikacji `dashboard` i `account` w INSTALLED_APPS), albo
+    `accur8pool_web.utils.data_processing…`, gdy na ścieżce jest katalog
+    NAD projektem. Obie próby są tanie i wykonują się raz na upload.
 
-      • filtruje rotx/roty/rotz dolnoprzepustowo (Butterworth + filtfilt,
-        granica 5 Hz), a `rotw` zostawia nietknięte — po tym zabiegu
-        czwarta składowa przestaje pasować do trzech pozostałych i test
-        wiarygodności w _quat_from_rotvec odrzuca ją, choć była dobra;
-      • filtfilt na Butterworcie PRZESTRZELIWUJE na szybkim zboczu, więc
-        |rot| potrafi wyjść poza 1, czego dla sinusa połowy kąta nie da
-        się zinterpretować inaczej niż jako uszkodzenie;
-      • lowpass_filter ma zaszyte fs=100 Hz, więc przy zapisie o innym
-        tempie faktyczna granica jest zupełnie inna niż deklarowana.
+    Poprzednio import był wpisany na jedną z tych postaci i cichł
+    w `except Exception` razem z błędami danych. Skutek był taki, że przy
+    złym ustawieniu ścieżki ŻADEN plik nie dostawał wersji przygotowanej,
+    a odpowiedź uploadu meldowała tylko `prepared: false` — nie do
+    odróżnienia od pliku bez wymaganych kolumn.
 
-    Kwaternion to nie jest sygnał, który wolno filtrować składowa po
-    składowej — jego składowe wiąże warunek |q| = 1, a filtr o tym nie
-    wie. Wersja przygotowana zostaje dobra do wykresu 2D i do dalszego
-    przetwarzania; do odtwarzania ruchu potrzebny jest oryginał.
-
-    Zapas na wersję przygotowaną jest dla zestawów, których surowy plik
-    zniknął — lepiej pokazać animację z zastrzeżeniem niż 404.
+    Import jest leniwy (w funkcji, nie na górze modułu) celowo:
+    transform_raw_df ciągnie za sobą scipy, a to zależność potrzebna
+    wyłącznie tutaj — bez niej reszta dashboardu ma działać normalnie.
     """
-    raw_path = _user_dir(user) / dataset.filename
-    if raw_path.exists():
-        return raw_path, True
-    return _user_prepared_dir(user) / dataset.filename, False
+    try:
+        from utils.data_processing import prepare_raw_data
+    except ImportError:
+        from accur8pool_web.utils.data_processing import prepare_raw_data
+    return prepare_raw_data
 
 
 def _prepare_uploaded_file(user, raw_path, filename):
     """Liczy wersję przygotowaną świeżo wgranego pliku.
 
-    Import jest w środku funkcji celowo: transform_raw_df ciągnie za sobą
-    scipy, a to zależność potrzebna wyłącznie tutaj — bez niej reszta
-    dashboardu (wykresy, animacja 3D) ma działać normalnie.
+    Zwraca (ścieżka, None) po udanym przygotowaniu albo (None, komunikat)
+    po nieudanym. Nieudana transformacja UNIEWAŻNIA CAŁY UPLOAD: skoro
+    aplikacja czyta wyłącznie wersję przygotowaną, plik bez niej nie miałby
+    czego pokazać, a zestaw widniejący na liście i otwierający się pustym
+    błędem jest gorszy niż odmowa przyjęcia pliku.
 
-    Zwraca ścieżkę zapisanego pliku albo None, gdy przygotowanie się nie
-    udało. Nieudana transformacja NIE unieważnia uploadu — surowy plik
-    jest już na dysku i da się go oglądać; brakuje tylko pochodnych
-    kolumn, więc wystarczy to odnotować w logu i w odpowiedzi.
+    Komunikat wraca do przeglądarki, więc niesie powód (np. których kolumn
+    brakuje) — pełny ślad wyjątku zostaje w logu.
     """
     try:
-        from accur8pool_web.utils.data_processing.prepare_raw_data import prepare_raw_file_and_save
+        prepare_raw_data = _prepare_raw_data_module()
+    except ImportError:
+        # To jest awaria wdrożenia, a nie wada wgranego pliku — mówimy
+        # to wprost, zamiast sugerować użytkownikowi poprawianie danych.
+        logger.exception("Moduł przygotowania danych jest nieosiągalny")
+        return None, "Przygotowanie danych jest niedostępne na serwerze."
 
-        return prepare_raw_file_and_save(raw_path, _user_prepared_dir(user), filename)
+    try:
+        path = prepare_raw_data.prepare_raw_file_and_save(
+            raw_path, _user_prepared_dir(user), filename)
+    except prepare_raw_data.WrongColumnsException as exc:
+        logger.info("Plik %s nie nadaje się do przygotowania: %s", raw_path, exc)
+        return None, str(exc)
     except Exception:
         logger.exception("Nie udało się przygotować pliku: %s", raw_path)
-        return None
+        return None, "Nie udało się przygotować danych z tego pliku."
+
+    return path, None
 
 
 def _resolve_dataset(user, filename):
-    """Zwraca Dataset NALEŻĄCY DO user. Nazwa z URL-a nigdy nie trafia
-    wprost do ścieżki na dysku — zawsze przechodzi przez bazę."""
+    """Zwraca Dataset NALEŻĄCY DO user I MAJĄCY wersję przygotowaną.
+
+    Nazwa z URL-a nigdy nie trafia wprost do ścieżki na dysku — zawsze
+    przechodzi przez bazę.
+
+    Filtr po istnieniu pliku przygotowanego jest tym, co realizuje zasadę
+    „bez prepared zestawu nie widać”. Sam upload nie zakłada już wpisu bez
+    wersji przygotowanej, ale zestawy sprzed tej zmiany (i takie, których
+    plik ktoś usunął z dysku) nadal siedzą w bazie — a wpuszczone dalej
+    kończyłyby się pustym wykresem zamiast czytelnego „nie znaleziono”.
+    """
     qs = Dataset.objects.filter(owner=user)
     if filename:
-        return qs.filter(filename=filename).first()
-    return qs.first()
+        qs = qs.filter(filename=filename)
+
+    for dataset in qs:
+        if _dataset_path(user, dataset).exists():
+            return dataset
+    return None
 
 
 def _count_records(path):
@@ -489,7 +511,7 @@ def api_dataset_motion3d(request, filename):
     wartości są znormalizowane do 0–1 i jednostki fizyczne już nie
     istnieją, więc nie dałoby się z nich całkować przyspieszenia.
 
-    Plik przygotowany nadaje się do tego tak samo jak surowy: jednostki
+    Źródłem jest ten sam plik przygotowany, co dla wykresu 2D: jednostki
     zostają fizyczne, a oś czasu (`time` w sekundach) motion3d rozpoznaje
     sam — _axis_from_column wykrywa jednostkę zamiast ją zakładać.
     """
@@ -510,7 +532,7 @@ def api_dataset_motion3d(request, filename):
     if error:
         return error
 
-    path, surowy = _dataset_raw_path(request.user, dataset)
+    path = _dataset_path(request.user, dataset)
     if not path.exists():
         return JsonResponse({"error": "Plik nie istnieje na serwerze."}, status=404)
 
@@ -554,15 +576,6 @@ def api_dataset_motion3d(request, filename):
     except Exception:
         logger.exception("Rekonstrukcja 3D nie powiodła się: %s", path)
         return JsonResponse({"error": "Nie udało się zbudować animacji 3D."}, status=500)
-
-    if not surowy:
-        # Zastrzeżenie leci do podtytułu sceny, bo wpływa na to, CO widać:
-        # rot* w tej wersji pliku są przefiltrowane i orientacja może być
-        # zaokrąglona albo poszarpana. Patrz _dataset_raw_path.
-        result = {**result, "meta": {
-            **result["meta"],
-            "source_file": "przygotowany (brak surowego) — rot* przefiltrowane",
-        }}
 
     return JsonResponse(result)
 
@@ -816,10 +829,18 @@ def datasets_view(request):
 
 @login_required
 def api_datasets(request):
-    data = [
-        _dataset_meta(ds, path=_dataset_path(request.user, ds))
-        for ds in Dataset.objects.filter(owner=request.user)
-    ]
+    """Lista zestawów do sidebaru i do strony „Zestawy danych”.
+
+    Wchodzą TYLKO te, które mają wersję przygotowaną — bo tylko takie da
+    się otworzyć. Zestaw bez niej byłby pozycją na liście prowadzącą do
+    komunikatu o błędzie, a nie do danych.
+    """
+    data = []
+    for ds in Dataset.objects.filter(owner=request.user):
+        path = _dataset_path(request.user, ds)
+        if not path.exists():
+            continue
+        data.append(_dataset_meta(ds, path=path))
     return JsonResponse(data, safe=False)
 
 
@@ -850,11 +871,21 @@ def upload_dataset(request):
     user_dir = _user_dir(request.user)
     user_dir.mkdir(parents=True, exist_ok=True)
 
+    prepared_dir = _user_prepared_dir(request.user)
+
+    # Nazwa jest zajęta, jeśli leży w KTÓRYMKOLWIEK z dwóch drzew albo
+    # widnieje w bazie. Sprawdzenie samego raw_data nie wystarczało:
+    # nieudany upload sprząta po sobie surowy plik, a wpis w bazie ma
+    # unique_together (owner, filename) — bez tego kolejny plik o tej
+    # samej nazwie kończyłby się IntegrityError zamiast wersją „(2)”.
     stem, suffix = Path(safe_name).stem, Path(safe_name).suffix
+    zajete = set(
+        Dataset.objects.filter(owner=request.user).values_list("filename", flat=True)
+    )
     filename = safe_name
     dest_path = user_dir / filename
     counter = 1
-    while dest_path.exists():
+    while dest_path.exists() or (prepared_dir / filename).exists() or filename in zajete:
         counter += 1
         filename = f"{stem} ({counter}){suffix}"
         dest_path = user_dir / filename
@@ -867,12 +898,24 @@ def upload_dataset(request):
         logger.exception("Zapis pliku nieudany: %s", dest_path)
         return JsonResponse({"error": "Nie udało się zapisać pliku na serwerze."}, status=500)
 
+    # Wersja przygotowana powstaje od razu przy uploadzie — i jest
+    # WARUNKIEM przyjęcia pliku. Cała aplikacja czyta wyłącznie ją, więc
+    # zestaw bez niej nie miałby czego pokazać.
+    prepared_path, blad = _prepare_uploaded_file(request.user, dest_path, filename)
+
+    if prepared_path is None:
+        # Surowy plik idzie do kosza razem z uploadem. Nie ma wpisu
+        # w bazie, który by go pilnował, a zostawiony zająłby nazwę
+        # i kolejna próba z poprawionym plikiem wylądowałaby jako „(2)”.
+        dest_path.unlink(missing_ok=True)
+        return JsonResponse(
+            {"error": f"{blad} Plik nie został dodany — dane muszą dać się "
+                      f"przygotować, żeby dało się na nich pracować."},
+            status=422,
+        )
+
     dataset = Dataset.objects.create(owner=request.user, filename=filename)
 
-    # Wersja przygotowana powstaje od razu przy uploadzie, żeby dalsze
-    # przetwarzanie nie musiało liczyć jej za każdym razem od nowa.
-    prepared_path = _prepare_uploaded_file(request.user, dest_path, filename)
-
-    meta = _dataset_meta(dataset, path=dest_path)
-    meta["prepared"] = prepared_path is not None
+    meta = _dataset_meta(dataset, path=prepared_path)
+    meta["prepared"] = True
     return JsonResponse(meta)

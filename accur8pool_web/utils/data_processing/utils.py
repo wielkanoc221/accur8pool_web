@@ -162,7 +162,19 @@ def get_df_from_csv(path):
 
 
 def lowpass_filter(data, cutoff=8, fs=100):
-    b, a = butter(2, cutoff / (fs / 2), btype='low')
+    """Filtr Butterwortha 2. rzędu, zerofazowy (filtfilt).
+
+    `cutoff` musi leżeć poniżej częstotliwości Nyquista — inaczej butter()
+    dostaje znormalizowaną granicę >= 1 i wywraca się na ValueError.
+    Zwracamy wtedy sygnał nietknięty: filtr, który miałby przepuścić
+    wszystko, i tak nie ma czego odciąć, a wysypanie się na tym zabierało
+    plikowi całą wersję przygotowaną.
+    """
+    nyquist = fs / 2.0
+    if not (0 < cutoff < nyquist):
+        return np.asarray(data, dtype=float)
+
+    b, a = butter(2, cutoff / nyquist, btype='low')
     return filtfilt(b, a, data, axis=0)
 
 

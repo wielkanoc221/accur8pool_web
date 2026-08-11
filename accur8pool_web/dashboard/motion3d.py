@@ -67,12 +67,15 @@ CO JESZCZE JEST TRUDNE W TYCH DANYCH
    skokowo, dlatego przetrzymane próbki są wygładzane (_smooth_quat).
 
 4. Wektora obrotu NIE WOLNO filtrować składowa po składowej — jego
-   składowe wiąże warunek |q| = 1, o którym filtr nie wie. Dlatego
-   animacja czyta plik SUROWY, a nie wersję z prepared_data, gdzie
-   rotx/roty/rotz przechodzą przez filtr dolnoprzepustowy (a rotw nie).
-   Szczegóły przy views._dataset_raw_path. Gdyby mimo to trafił się
-   zapis z zepsutą orientacją, wyłapuje go porównanie z żyroskopem
-   w build_motion i animacja przechodzi na całkowanie żyroskopu.
+   składowe wiąże warunek |q| = 1, o którym filtr nie wie. Przez pewien
+   czas robiło to przygotowanie danych (rotx/roty/rotz przez filtr
+   dolnoprzepustowy, rotw nietknięte) i dlatego animacja musiała czytać
+   plik surowy. Teraz rot* przechodzą przez transform_raw_df bez zmian,
+   więc wersja przygotowana jest jedynym źródłem dla całej aplikacji —
+   szczegóły przy COLUMNS_TO_FILTER_5_CUT_OFF w prepare_raw_data.
+   Gdyby mimo to trafił się zapis z zepsutą orientacją, wyłapuje go
+   porównanie z żyroskopem w build_motion i animacja przechodzi na
+   całkowanie żyroskopu.
 
 UKŁADY WSPÓŁRZĘDNYCH
 --------------------
@@ -371,10 +374,9 @@ def _quat_from_rotvec(rv, dt, rw=None, acc=None, gyr=None):
 
     Kolumna `rotw` niesie ten znak wprost, więc gdy jest wiarygodna,
     wygrywa ze wszystkim. Bywa jednak zapisana błędnie (w jednym z plików
-    ma stałą wartość 246), a w wersji PRZYGOTOWANEJ pliku bywa niespójna
-    z rot* z innego powodu: transform_raw_df filtruje rotx/roty/rotz
-    dolnoprzepustowo, a rotw zostawia nietknięte. Dlatego bierzemy ją
-    tylko wtedy, gdy faktycznie domyka kwaternion do długości 1.
+    ma stałą wartość 246). Dlatego bierzemy ją tylko wtedy, gdy
+    faktycznie domyka kwaternion do długości 1 — ten sam test wyłapuje
+    też rot* zniekształcone gdziekolwiek po drodze.
 
     Bez wiarygodnego rotw znak czwartej składowej odtwarza _quat_w, ale
     ten potrzebuje znaku PIERWSZEJ próbki, którego z samych rot* nie da
@@ -1215,9 +1217,6 @@ def build_motion(prep, lo, hi, phases=(), fps=NO_FPS_LIMIT, smooth=True,
             # nie da się zauważyć, że plik ma zepsuty wektor obrotu.
             "rot_vs_gyro": (round(niezgodnosc, 3)
                             if niezgodnosc is not None else None),
-            # Zastrzeżenie o pochodzeniu pliku dokłada widok, gdy musiał
-            # sięgnąć po wersję przygotowaną zamiast surowej.
-            "source_file": None,
             "rows": hi - lo,
             "lo": lo,
             "hi": hi,

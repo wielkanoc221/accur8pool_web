@@ -431,10 +431,10 @@ document.addEventListener('DOMContentLoaded', function () {
             if (meta.span_cm) czesci.push('scena ' + meta.span_cm.toFixed(1) + ' cm');
             if (meta.stride > 1) czesci.push('co ' + meta.stride + '. próbka');
             if (meta.gaps) czesci.push(meta.gaps + ' × przerwa w nagraniu (skrócona)');
-            // Plik, z którego to policzono, i zgodność wektora obrotu
-            // z żyroskopem. Jedno i drugie tłumaczy szarpiącą się bryłę
-            // zegarka, więc ma być widoczne, a nie tylko w logach.
-            if (meta.source_file) czesci.push('plik ' + meta.source_file);
+            // Zgodność wektora obrotu z żyroskopem — tłumaczy szarpiącą
+            // się bryłę zegarka, więc ma być widoczna, a nie tylko
+            // w logach. Zastrzeżenia o pochodzeniu pliku już nie ma:
+            // źródłem jest zawsze wersja przygotowana.
             if (meta.rot_vs_gyro !== null && meta.rot_vs_gyro > 0.35) {
                 czesci.push('rozjazd z żyroskopem ' +
                             (meta.rot_vs_gyro * 100).toFixed(0) + '%');

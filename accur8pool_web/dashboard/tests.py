@@ -130,11 +130,22 @@ class BaseDataTest(TestCase):
         self.client.force_login(self.user)
 
     def upload(self, nazwa, tresc=None):
-        """Zapisuje CSV tam, gdzie szuka go widok, i rejestruje Dataset."""
-        user_dir = self.tmp_dir / str(self.user.pk)
-        user_dir.mkdir(parents=True, exist_ok=True)
-        (user_dir / nazwa).write_text(imu_csv() if tresc is None else tresc,
-                                      encoding="utf-8")
+        """Zapisuje CSV tam, gdzie szuka go widok, i rejestruje Dataset.
+
+        Plik ląduje w OBU drzewach. Aplikacja czyta wyłącznie
+        prepared_data i zestaw bez wersji przygotowanej jest dla niej
+        niewidoczny, więc test, który zapisałby tylko surowy plik,
+        dostawałby wszędzie 404 — niezależnie od tego, co sprawdza.
+
+        Treść jest w obu miejscach ta sama: te testy nie sprawdzają
+        transformacji (od tego są UploadTests), tylko zachowanie widoków
+        na gotowym pliku.
+        """
+        for katalog in (self.tmp_dir, self.prepared_dir):
+            user_dir = katalog / str(self.user.pk)
+            user_dir.mkdir(parents=True, exist_ok=True)
+            (user_dir / nazwa).write_text(imu_csv() if tresc is None else tresc,
+                                          encoding="utf-8")
         return Dataset.objects.create(owner=self.user, filename=nazwa)
 
 
@@ -385,7 +396,11 @@ class SegmentApiTests(BaseDataTest):
 # ============================================================
 
 class UploadTests(BaseDataTest):
-    """Upload zapisuje plik w DWÓCH drzewach: surowy i przygotowany."""
+    """Upload zapisuje plik w DWÓCH drzewach: surowy i przygotowany.
+
+    Wersja przygotowana jest WARUNKIEM przyjęcia pliku — bez niej nie ma
+    ani wpisu w bazie, ani pliku surowego na dysku.
+    """
 
     def wyslij(self, nazwa, tresc):
         plik = SimpleUploadedFile(nazwa, tresc.encode("utf-8"), content_type="text/csv")
@@ -414,6 +429,38 @@ class UploadTests(BaseDataTest):
                         "jerk_accx", "roll", "pitch", "session_index"):
             self.assertIn(kolumna, prepared.columns)
         self.assertEqual(len(prepared), len(raw))
+
+    def test_wektor_obrotu_przechodzi_nietkniety(self):
+        # rot* to składowe kwaternionu, wiązane warunkiem |q| = 1. Filtr
+        # przepuszczany składowa po składowej łamał ten warunek i to był
+        # jedyny powód, dla którego animacja 3D musiała czytać plik surowy.
+        # Reszta czujników ma zostać przefiltrowana — inaczej ten test
+        # przechodziłby także wtedy, gdyby filtrowania nie było w ogóle.
+        self.wyslij("ruch.csv", imu_csv(seconds=4.0, with_mag=True))
+        raw_path, prepared_path = self.sciezki("ruch.csv")
+        raw, prepared = pd.read_csv(raw_path), pd.read_csv(prepared_path)
+
+        for kolumna in ("rotx", "roty", "rotz"):
+            self.assertTrue(np.allclose(prepared[kolumna], raw[kolumna]),
+                            f"{kolumna} zostało zmienione przez transformację")
+
+        for kolumna in ("accx", "gyry"):
+            self.assertFalse(np.allclose(prepared[kolumna], raw[kolumna]),
+                             f"{kolumna} nie zostało przefiltrowane")
+
+    def test_filtr_bierze_tempo_zapisu_z_pliku(self):
+        # Zapis testowy idzie 400 Hz. Przy zaszytym na sztywno fs = 100 Hz
+        # granica 10 Hz wychodziła w rzeczywistości 40 Hz, więc filtr
+        # zostawiał wielokrotnie więcej wysokich częstotliwości, niż
+        # deklarował. Sprawdzamy to na samym transformerze, bo w gotowym
+        # pliku widać już tylko skutek.
+        from utils.data_processing.data_transformations import DataFrameTransformerBase
+
+        df = pd.DataFrame({"timestamp": np.full(2000, 1000.0 / FS_IMU),
+                           "accx": np.zeros(2000)})
+        transformer = DataFrameTransformerBase(df).dt_ms_to_sec().add_time()
+
+        self.assertAlmostEqual(transformer.sampling_rate(), FS_IMU, delta=1.0)
 
     def test_brak_opcjonalnych_czujnikow_nie_blokuje_przygotowania(self):
         # Listy kolumn do filtrowania w transform_raw_df opisują KOMPLET
@@ -450,19 +497,32 @@ class UploadTests(BaseDataTest):
         self.assertAlmostEqual(czas[-1], 4.0, delta=0.05)
         self.assertTrue(np.all(np.diff(czas) > 0))
 
-    def test_plik_bez_kompletu_kolumn_wciaz_sie_wgrywa(self):
-        # Transformacja wymaga m.in. magnetometru. Gdy go nie ma, upload ma
-        # się udać — brakuje tylko wersji przygotowanej.
-        with mock.patch.object(views.logger, "exception"):
-            response = self.wyslij("plaski.csv", "a,b\n" + "".join(f"{i},{i}\n"
-                                                                  for i in range(50)))
+    def test_plik_bez_wymaganych_kolumn_jest_odrzucany(self):
+        # Aplikacja czyta wyłącznie wersję przygotowaną, więc plik, z
+        # którego nie da się jej policzyć, nie wchodzi do systemu wcale.
+        response = self.wyslij("plaski.csv", "a,b\n" + "".join(f"{i},{i}\n"
+                                                               for i in range(50)))
+
+        self.assertEqual(response.status_code, 422)
+        # Komunikat ma powiedzieć, CZEGO brakuje — to jedyna wskazówka,
+        # jaką użytkownik dostanie o swoim pliku.
+        self.assertIn("accx", response.json()["error"])
+
+        # Ani wpisu w bazie, ani śladu na dysku — w tym surowego pliku,
+        # bo bez wpisu nikt by go już nie posprzątał.
+        self.assertFalse(Dataset.objects.filter(owner=self.user).exists())
+        raw_path, prepared_path = self.sciezki("plaski.csv")
+        self.assertFalse(raw_path.exists())
+        self.assertFalse(prepared_path.exists())
+
+    def test_po_odrzuceniu_nazwa_zostaje_wolna(self):
+        # Odrzucony upload nie ma prawa zająć nazwy: poprawiony plik
+        # powinien wejść jako „ruch.csv”, a nie „ruch (2).csv”.
+        self.wyslij("ruch.csv", "a,b\n1,2\n")
+        response = self.wyslij("ruch.csv", imu_csv(seconds=4.0, with_mag=True))
 
         self.assertEqual(response.status_code, 200)
-        self.assertFalse(response.json()["prepared"])
-
-        raw_path, prepared_path = self.sciezki("plaski.csv")
-        self.assertTrue(raw_path.exists())
-        self.assertFalse(prepared_path.exists())
+        self.assertEqual(response.json()["name"], "ruch.csv")
 
     def test_kolejny_plik_o_tej_samej_nazwie_nie_nadpisuje_przygotowanego(self):
         tresc = imu_csv(seconds=4.0, with_mag=True)
@@ -476,9 +536,15 @@ class UploadTests(BaseDataTest):
         self.assertTrue(raw_path.exists())
         self.assertTrue(prepared_path.exists())
 
+    def test_liczba_rekordow_jest_z_wersji_przygotowanej(self):
+        response = self.wyslij("ruch.csv", imu_csv(seconds=4.0, with_mag=True))
+
+        prepared = pd.read_csv(self.sciezki("ruch.csv")[1])
+        self.assertEqual(response.json()["records"], len(prepared))
+
 
 class PreparedDataReadTests(BaseDataTest):
-    """Wykres i animacja 3D czytają wersję przygotowaną, gdy ta istnieje."""
+    """Wersja przygotowana jest JEDYNYM źródłem danych dla aplikacji."""
 
     def setUp(self):
         super().setUp()
@@ -506,19 +572,42 @@ class PreparedDataReadTests(BaseDataTest):
         self.assertEqual(response.context["columns_count"],
                          self.kolumny_liczbowe(self.prepared_path))
 
-    def test_bez_wersji_przygotowanej_wraca_surowy_plik(self):
-        # Zestawy wgrane, zanim prepared_data istniało, mają nadal działać.
+    def test_bez_wersji_przygotowanej_zestawu_nie_widac(self):
+        # Zestawy sprzed tej zmiany (albo takie, którym ktoś skasował plik
+        # przygotowany) mają zniknąć z interfejsu, a nie degradować się do
+        # surowego pliku. Surowy leży nietknięty — to kopia źródłowa.
         self.prepared_path.unlink()
+        self.assertTrue(self.raw_path.exists())
 
+        # Nie ma go na liście…
+        self.assertEqual(self.client.get(reverse("api_datasets")).json(), [])
+
+        # …ani pod własnym adresem.
         response = self.client.get(reverse("dashboard", args=["ruch.csv"]))
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.context["columns_count"],
-                         self.kolumny_liczbowe(self.raw_path))
+        self.assertIsNone(response.context["dataset"])
+        self.assertIn("ruch.csv", response.context["error"])
+
+    def test_bez_wersji_przygotowanej_api_odmawia(self):
+        self.prepared_path.unlink()
+        segment = Segment.objects.create(dataset=self.dataset, start=200, end=1000)
+
+        for url in (reverse("api_dataset_range", args=["ruch.csv"]) + "?x0=0&x1=500",
+                    reverse("api_dataset_motion3d", args=["ruch.csv"])
+                    + f"?segment={segment.pk}",
+                    reverse("api_segments", args=["ruch.csv"])):
+            with self.subTest(url=url):
+                self.assertEqual(self.client.get(url).status_code, 404)
 
     def test_animacja_3d_liczy_sie_z_wersji_przygotowanej(self):
         segment = Segment.objects.create(dataset=self.dataset, start=200, end=1000)
         url = (reverse("api_dataset_motion3d", args=["ruch.csv"])
                + f"?segment={segment.pk}")
+
+        # Surowy plik znika — animacja ma się policzyć mimo to. Wcześniej
+        # to ona była jedynym miejscem czytającym raw_data, bo filtr psuł
+        # w wersji przygotowanej wektor obrotu.
+        self.raw_path.unlink()
 
         body = self.client.get(url).json()
         self.assertEqual(body["meta"]["source"], "fused")

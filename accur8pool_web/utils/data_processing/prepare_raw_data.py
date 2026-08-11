@@ -23,10 +23,40 @@ class WrongColumnsException(Exception):
     pass
 
 
+# Bez tych kolumn transformacja nie ma z czego policzyć NICZEGO: magnitudy,
+# jerk, roll i pitch biorą się z acc* i gyr*, a oś czasu z timestamp.
+# Reszta czujników (magnetometr, linacc, wektor obrotu) jest opcjonalna —
+# zapisy różnią się między wersjami zegarka i brak jednego z nich nie ma
+# prawa unieważnić całego pliku.
+REQUIRED_COLUMNS = (ACC_X, ACC_Y, ACC_Z, GYR_X, GYR_Y, GYR_Z, TIMESTAMP)
+
+
+def missing_required_columns(df: DataFrame) -> list[str]:
+    """Kolumny z REQUIRED_COLUMNS, których w ramce nie ma — w kolejności
+    z REQUIRED_COLUMNS, żeby komunikat dla użytkownika był powtarzalny."""
+    obecne = set(df.columns)
+    return [column for column in REQUIRED_COLUMNS if column not in obecne]
+
+
 def transform_raw_df(df: DataFrame) -> pd.DataFrame:
     try:
         COLUMNS_TO_FILTER_10_CUT_OFF = ['accx', 'accy', 'accz', 'linaccx', 'linaccy', 'linaccz', ]
-        COLUMNS_TO_FILTER_5_CUT_OFF = ['rotx', 'roty', 'rotz', 'gyrx', 'gyry', 'gyrz', 'magx', 'magy', 'magz']
+
+        # rot* CELOWO nie ma na tej liście, choć kiedyś było.
+        #
+        # rotx/roty/rotz to trzy składowe KWATERNIONU, wiązane warunkiem
+        # |q| = 1 razem z rotw. Filtr o tym warunku nie wie: przepuszczany
+        # składowa po składowej rozjeżdżał rot* z nietkniętym rotw,
+        # a filtfilt na Butterworcie przestrzeliwuje na szybkim zboczu, więc
+        # |rot| potrafiło wyjść poza 1 — czyli poza sinus połowy kąta,
+        # którego nie da się zinterpretować inaczej niż jako uszkodzenie.
+        # Rekonstrukcja orientacji w motion3d odrzucała wtedy dobrą kolumnę
+        # rotw i odtwarzała znak czwartej składowej z kinematyki.
+        #
+        # To był jedyny powód, dla którego animacja 3D musiała sięgać po
+        # plik surowy. Wektor obrotu jest wyjściem fuzji czujników, więc
+        # jest już wygładzony u źródła i nie ma czego z niego obcinać.
+        COLUMNS_TO_FILTER_5_CUT_OFF = ['gyrx', 'gyry', 'gyrz', 'magx', 'magy', 'magz']
         if 'csv_version' in df.columns:
             transformer = DataFrameTransformerV2
 
@@ -38,19 +68,27 @@ def transform_raw_df(df: DataFrame) -> pd.DataFrame:
         # czy wektor obrotu. Listy powyżej opisują komplet, więc filtrujemy
         # to, co faktycznie jest w pliku; inaczej brak jednej kolumny
         # kończy się KeyError i cały plik zostaje bez wersji przygotowanej.
-        # Kolumny wymagane przez dalsze kroki (acc*, gyr*, timestamp) i tak
-        # muszą być — na ich braku transformacja ma prawo się wywrócić.
+        # Komplet naprawdę niezbędny opisuje REQUIRED_COLUMNS i sprawdza go
+        # prepare_raw_file_and_save, zanim tu w ogóle wejdziemy.
         present = [c for c in COLUMNS_TO_FILTER_10_CUT_OFF if c in df.columns]
         present_5 = [c for c in COLUMNS_TO_FILTER_5_CUT_OFF if c in df.columns]
 
+        # add_time() idzie PRZED filtrami, a nie po nich. Filtr projektuje
+        # się względem częstotliwości próbkowania, a tę da się odczytać
+        # dopiero z gotowej osi czasu (DataFrameTransformerBase.lowpass →
+        # sampling_rate). Wcześniej fs było wpisane na sztywno jako 100 Hz,
+        # więc przy zapisie 400 Hz deklarowana granica 10 Hz wychodziła
+        # w rzeczywistości 40 Hz. Na wynik pozostałych kroków kolejność nie
+        # wpływa — magnitudy nie zależą od czasu, a jerk i tak potrzebuje
+        # osi czasu i sam by ją dołożył.
         return (
             transformer(df)
             .dt_ms_to_sec()
+            .add_time()
             .lowpass(columns=present, cutoff=10)
             .lowpass(columns=present_5, cutoff=5)
             .add_magnitude([ACC_X, ACC_Y, ACC_Z], ACC_MAGNITUDE)
             .add_magnitude([GYR_X, GYR_Y, GYR_Z], GYR_MAGNITUDE)
-            .add_time()
             .add_jerk([ACC_X, ACC_Y, ACC_Z], prefix='acc')
             .add_jerk([GYR_X, GYR_Y, GYR_Z], prefix='gyr')
             .add_roll()
@@ -59,17 +97,6 @@ def transform_raw_df(df: DataFrame) -> pd.DataFrame:
         )
     except Exception as e:
         raise TransformException(e)
-
-
-def check_columns(df: pd.DataFrame):
-    try:
-        reuqired_columns = {'accx', 'accy', 'accz', 'gyrx', 'gyry', 'gyrz', 'magx', 'magy', 'magz', 'linaccx',
-                            'linaccy',
-                            'linaccz', 'rotx', 'roty', 'rotz', 'timestamp'}
-        columns = set(df.columns)
-    except Exception as e:
-        raise WrongColumnsException(e)
-    return reuqired_columns.issubset(columns)
 
 
 def save_data(df: DataFrame, output_dir, filename):
@@ -110,12 +137,26 @@ def prepare_raw_file_and_save(input_path: Path, output_dir: Path, filename: str 
     (odczyt → transformacja → zapis) używa upload w aplikacji webowej,
     gdzie plik przychodzi pojedynczo. Wyjątki lecą dalej — o tym, czy
     błąd tylko logujemy, czy przerywa całość, decyduje wołający.
+
+    Komplet kolumn sprawdzamy TUTAJ, przed transformacją, bo w aplikacji
+    webowej to jedyny moment, w którym da się powiedzieć użytkownikowi
+    coś konkretnego: bez wersji przygotowanej plik nie wchodzi do systemu
+    w ogóle, więc komunikat „brakuje kolumn accx, accy” jest jedyną
+    informacją, jaką dostanie. Wyjątek z głębi transformacji niesie
+    najwyżej KeyError z nazwą jednej kolumny.
     """
     input_path = Path(input_path)
     output_dir = Path(output_dir)
     filename = filename or input_path.name
 
     df = read_csv(input_path)
+
+    brakujace = missing_required_columns(df)
+    if brakujace:
+        raise WrongColumnsException(
+            "Brakuje wymaganych kolumn: " + ", ".join(brakujace)
+        )
+
     df['session_index'] = input_path.stem
     transformed = transform_raw_df(df)
     save_data(transformed, output_dir, filename)
@@ -132,6 +173,8 @@ def prepare_raw_data_and_save(input_paths: list[Path], output_dir: Path):
 
         except FileReadException as e:
             print(f'ERROR blad odczytu pliku {path} {e} ')
+        except WrongColumnsException as e:
+            print(f'ERROR niepelny zestaw kolumn w pliku {path}: {e}')
         except TransformException as e:
             print(f'ERROR blad transformacji pliku {path} {e}')
 

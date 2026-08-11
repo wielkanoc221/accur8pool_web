@@ -14,10 +14,51 @@ from .utils import (
 )
 
 
+# Częstotliwość próbkowania używana WYŁĄCZNIE wtedy, gdy nie da się jej
+# odczytać z osi czasu pliku.
+FALLBACK_FS = 100.0
+
+# Sensowny odstęp między próbkami w sekundach. Poza tym przedziałem
+# uznajemy, że oś czasu znaczy co innego, niż nam się wydaje, i wracamy do
+# FALLBACK_FS zamiast projektować filtr na przypadkowej liczbie.
+MIN_DT, MAX_DT = 1e-4, 1.0
+
+
 class DataFrameTransformerBase:
     def __init__(self, data: DataFrame, copy: bool = True):
         self.data = data.copy() if copy else data
         self.new_columns = []
+
+    def sampling_rate(self, default: float = FALLBACK_FS) -> float:
+        """Częstotliwość próbkowania ODCZYTANA z danych, nie założona.
+
+        Filtr dolnoprzepustowy projektuje się względem fs, więc wpisana
+        gdzieś na sztywno setka znaczyła, że przy zapisie 400 Hz
+        deklarowana granica 10 Hz wychodziła w rzeczywistości 40 Hz,
+        a przy zapisie 25 Hz filtr przestawał być dolnoprzepustowy
+        w ogóle. Zegarki zapisują w różnym tempie, więc tempo trzeba
+        zmierzyć.
+
+        Krok bierzemy z MEDIANY odstępów: pojedyncza dziura w zapisie
+        (uśpiony czujnik, pauza) nie ma prawa przestawić całego filtra.
+        """
+        if TIME in self.data.columns:
+            dt = np.diff(np.asarray(self.data[TIME], dtype=float))
+        elif TIMESTAMP in self.data.columns:
+            # Po dt_ms_to_sec/add_time TIMESTAMP niesie odstęp w sekundach.
+            # Pierwszy wiersz odpada — tam odstępu jeszcze nie ma.
+            dt = np.asarray(self.data[TIMESTAMP], dtype=float)[1:]
+        else:
+            return default
+
+        dt = dt[np.isfinite(dt) & (dt > 0)]
+        if dt.size == 0:
+            return default
+
+        krok = float(np.median(dt))
+        if not (MIN_DT <= krok <= MAX_DT):
+            return default
+        return 1.0 / krok
 
     def downsample(self) -> 'DataFrameTransformerBase':
 
@@ -64,10 +105,21 @@ class DataFrameTransformerBase:
         )
         return self
 
-    def lowpass(self, columns: Sequence[str], cutoff: float) -> "DataFrameTransformerBase":
+    def lowpass(self, columns: Sequence[str], cutoff: float,
+                fs: float = None) -> "DataFrameTransformerBase":
+        """Filtruje wskazane kolumny względem PRAWDZIWEGO tempa zapisu.
+
+        Bez `fs` częstotliwość bierze się z sampling_rate(), czyli z osi
+        czasu pliku — dlatego add_time() musi iść przed lowpass()
+        w łańcuchu przygotowania.
+        """
+        if not columns:
+            return self
+
+        fs = self.sampling_rate() if fs is None else fs
         for col in columns:
-            self.data[col] = lowpass_filter(self.data[col], cutoff=cutoff)
-            self.data[col] = lowpass_filter(self.data[col], cutoff=cutoff)
+            self.data[col] = lowpass_filter(self.data[col], cutoff=cutoff, fs=fs)
+            self.data[col] = lowpass_filter(self.data[col], cutoff=cutoff, fs=fs)
         return self
 
     def add_magnitude(

@@ -37,8 +37,9 @@ async function uploadDatasetFile(file) {
         throw new Error(payload.error || `Błąd serwera (${response.status})`);
     }
 
-    // `prepared` mówi, czy obok surowego pliku powstała wersja
-    // przygotowana (transform_raw_df). false nie jest błędem uploadu —
-    // plik jest na serwerze, brakuje tylko kolumn pochodnych.
+    // Odpowiedź 2xx znaczy, że plik ma wersję przygotowaną — bez niej
+    // serwer w ogóle go nie przyjmuje (cała aplikacja czyta wyłącznie
+    // prepared_data). Nieudane przygotowanie wraca jako 422 z powodem
+    // w `error`, czyli tą samą drogą co pozostałe błędy wyżej.
     return payload; // { id, name, records, updated_at, url, prepared }
 }
