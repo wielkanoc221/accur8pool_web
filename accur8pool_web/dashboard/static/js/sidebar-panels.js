@@ -1,4 +1,79 @@
+/* ============================================================
+   ACCUR8POOL — lewy sidebar
+
+   Dwie sprawy: przełączanie panelu „menu / lista plików” oraz zwijanie
+   sidebaru do szyny z ikonami. Stan zwinięcia trzyma klasa na <body>
+   (steruje nią CSS) i localStorage, więc przeżywa przeładowanie strony
+   i przejście między dashboardem a listą zestawów danych.
+   ============================================================ */
+
 document.addEventListener('DOMContentLoaded', function () {
+
+    // ============================================================
+    //  ZWIJANIE SIDEBARU
+    //  Osobno od paneli — działa też tam, gdzie paneli nie ma.
+    // ============================================================
+    const STORAGE_KEY = 'a8.sidebar.collapsed';
+    const MOBILE_MAX = 768;
+    const toggle = document.getElementById('sidebar-toggle');
+
+    /** localStorage bywa niedostępny (tryb prywatny, zablokowane cookies) —
+     *  brak pamięci stanu nie może wywalić całej nawigacji. */
+    function readStored() {
+        try { return localStorage.getItem(STORAGE_KEY) === '1'; } catch (err) { return false; }
+    }
+
+    function store(collapsed) {
+        try { localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0'); } catch (err) { /* trudno */ }
+    }
+
+    function isCollapsed() {
+        return document.body.classList.contains('sidebar-collapsed');
+    }
+
+    function setCollapsed(collapsed, remember) {
+        document.body.classList.toggle('sidebar-collapsed', collapsed);
+        if (toggle) {
+            toggle.setAttribute('aria-expanded', String(!collapsed));
+            const opis = collapsed ? 'Rozwiń menu' : 'Zwiń menu';
+            toggle.setAttribute('aria-label', opis);
+            toggle.setAttribute('title', opis + ' (Ctrl + B)');
+        }
+        if (remember !== false) store(collapsed);
+
+        // Plotly nie wie, że kontener wykresu zmienił szerokość przez CSS —
+        // bez tego wykres zostaje w starym rozmiarze aż do resize okna.
+        // Przeliczenie po zakończeniu animacji szerokości (0.22s w CSS).
+        setTimeout(function () {
+            if (!window.Plotly) return;
+            document.querySelectorAll('.plot-area, #graph').forEach(function (el) {
+                if (el.data) Plotly.Plots.resize(el);
+            });
+        }, 260);
+    }
+
+    if (toggle) {
+        // Stan z pamięci wchodzi tylko na szerokim ekranie: na telefonie
+        // sidebar jest szufladą i „zwinięty” nic tam nie znaczy.
+        setCollapsed(readStored() && window.innerWidth > MOBILE_MAX, false);
+
+        toggle.addEventListener('click', function () {
+            setCollapsed(!isCollapsed());
+        });
+
+        // Skrót jak w edytorach kodu — sidebar zwija się bez sięgania myszą.
+        document.addEventListener('keydown', function (e) {
+            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && !e.altKey &&
+                (e.key === 'b' || e.key === 'B')) {
+                e.preventDefault();
+                setCollapsed(!isCollapsed());
+            }
+        });
+    }
+
+    // ============================================================
+    //  PANELE: MENU / LISTA PLIKÓW
+    // ============================================================
     const track = document.getElementById('nav-menu-track');
     const openBtn = document.getElementById('open-files-panel');
     const backBtn = document.getElementById('back-to-main');
@@ -8,6 +83,9 @@ document.addEventListener('DOMContentLoaded', function () {
     let filesLoaded = false;
 
     openBtn.addEventListener('click', function () {
+        // W szynie ikon lista plików byłaby rzędem identycznych ikonek
+        // dokumentów bez nazw — wejście do niej rozwija sidebar.
+        if (isCollapsed()) setCollapsed(false);
         track.classList.add('show-files');
         if (!filesLoaded) {
             loadSidebarFiles();
@@ -64,8 +142,9 @@ document.addEventListener('DOMContentLoaded', function () {
             // i wczytuje pod tym adresem nowy dashboard.
             list.innerHTML = datasets.map(ds => `
                 <a href="${escapeHtml(ds.url)}" target="_self"
+                   title="${escapeHtml(ds.name)}"
                    class="nav-item nav-file-item${ds.id === window.currentDatasetId ? ' active' : ''}">
-                    <span class="nav-icon">📄</span>
+                    <span class="nav-icon"><svg class="icon"><use href="#i-file"></use></svg></span>
                     <span class="nav-file-name">${escapeHtml(ds.name)}</span>
                 </a>
             `).join('');

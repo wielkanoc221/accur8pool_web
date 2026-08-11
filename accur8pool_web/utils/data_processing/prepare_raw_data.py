@@ -58,6 +58,7 @@ def transform_raw_df(df: DataFrame) -> pd.DataFrame:
         # jest już wygładzony u źródła i nie ma czego z niego obcinać.
         COLUMNS_TO_FILTER_5_CUT_OFF = ['gyrx', 'gyry', 'gyrz', 'magx', 'magy', 'magz']
         if 'csv_version' in df.columns:
+
             transformer = DataFrameTransformerV2
 
         else:

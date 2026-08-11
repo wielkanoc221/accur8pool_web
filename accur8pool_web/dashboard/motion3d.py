@@ -921,7 +921,11 @@ def _build_figure(pos_cm, zakres, kolory_zegarka):
 
     def os(tytul, klucz):
         return {
-            "title": {"text": tytul, "font": {"color": "#94a3b8", "size": 11}},
+            # Podpisy i cyfry na ciemnej scenie muszą być jaśniejsze niż na
+            # jasnej karcie — #64748b, którym są opisane osie wykresu 2D,
+            # daje tu ok. 3:1 i przy obrocie sceny znika w siatce.
+            "title": {"text": tytul, "font": {"color": "#cbd5e1", "size": 11.5}},
+            "tickfont": {"color": "#94a3b8", "size": 10.5},
             # Zaokrąglenie idzie do mikrometra, a nie do setnej centymetra:
             # przy `aspectmode: cube` Plotly rozciąga zakresy do sześcianu,
             # więc nierówne boki po zaokrągleniu zniekształcałyby tor.
@@ -929,11 +933,17 @@ def _build_figure(pos_cm, zakres, kolory_zegarka):
             "backgroundcolor": "#0f172a",
             "gridcolor": "rgba(148,163,184,0.16)",
             "zerolinecolor": "rgba(148,163,184,0.35)",
-            "color": "#64748b",
+            "color": "#94a3b8",
             "showspikes": False,
         }
 
     layout = {
+        # Ten sam krój co reszta interfejsu (patrz views.PLOT_FONT).
+        "font": {
+            "family": ("Inter, system-ui, -apple-system, 'Segoe UI', Roboto, "
+                       "'Helvetica Neue', Arial, sans-serif"),
+            "color": "#94a3b8",
+        },
         # Ciemna scena, bo animacja to jasny obiekt w ruchu na tle
         # nieruchomej siatki — na białym tle jedno i drugie ma ten sam
         # ciężar i tor gubi się w gridzie.

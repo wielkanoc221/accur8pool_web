@@ -53,7 +53,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
         if (typeof Plotly === 'undefined') {
             graphDiv.innerHTML =
-                '<div class="empty-state"><div class="empty-state-icon">⚠️</div>' +
+                '<div class="empty-state">' +
+                '<div class="empty-state-icon is-error"><svg class="icon icon-lg">' +
+                '<use href="#i-alert"></use></svg></div>' +
                 '<p>Nie udało się załadować biblioteki wykresów.<br>' +
                 'Sprawdź połączenie i odśwież stronę.</p></div>';
             console.error('Plotly nie został załadowany.');

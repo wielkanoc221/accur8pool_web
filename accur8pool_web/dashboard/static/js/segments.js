@@ -38,7 +38,7 @@ document.addEventListener('DOMContentLoaded', function () {
     // ---------- kolory ----------
     // Kolejność faz i ich nazwy przychodzą z serwera (modele są jedynym
     // źródłem prawdy). Tutaj zostaje tylko warstwa wizualna.
-    const SEGMENT_COLOR = '#3b82f6';
+    const SEGMENT_COLOR = '#2563eb';
 
     // Skróty na prostokątach zostają tutaj — to czysta warstwa wizualna
     // wykresu 2D. KOLOR przychodzi z serwera (phase_types), bo tę samą
@@ -50,7 +50,7 @@ document.addEventListener('DOMContentLoaded', function () {
         uderzenie:     'UDER',
         po_uderzeniu:  'PO UD'
     };
-    const FALLBACK_COLOR = '#64748b';
+    const FALLBACK_COLOR = '#475569';
 
     function styleFor(key) {
         const type = phaseTypes.find(t => t.key === key);
@@ -243,7 +243,9 @@ document.addEventListener('DOMContentLoaded', function () {
                 label: {
                     text: seg.name,
                     textposition: 'top center',
-                    font: { size: 10, color: isActive ? '#1d4ed8' : '#94a3b8' }
+                    // #94a3b8 na białym tle to 2.6:1 — numer segmentu był
+                    // ledwie widoczny na własnym prostokącie.
+                    font: { size: 11, color: isActive ? '#1d4ed8' : '#64748b' }
                 }
             });
         });
@@ -269,7 +271,7 @@ document.addEventListener('DOMContentLoaded', function () {
                     label: {
                         text: style.short,
                         textposition: 'bottom center',
-                        font: { size: 9, color: style.color }
+                        font: { size: 10, color: style.color }
                     }
                 });
             });
@@ -346,7 +348,9 @@ document.addEventListener('DOMContentLoaded', function () {
     function renderList() {
         if (!segments.length) {
             els.list.innerHTML =
-                '<div class="empty-state"><div class="empty-state-icon">✂️</div>' +
+                '<div class="empty-state">' +
+                '<div class="empty-state-icon"><svg class="icon icon-lg">' +
+                '<use href="#i-scissors"></use></svg></div>' +
                 '<p>Brak segmentów.<br>Zaznacz pierwsze uderzenie na wykresie.</p></div>';
             return;
         }
@@ -365,9 +369,13 @@ document.addEventListener('DOMContentLoaded', function () {
                 </div>
                 <div class="seg-actions">
                     <button type="button" class="seg-btn" data-action="zoom"
-                            title="Pokaż na wykresie">🔍</button>
+                            title="Pokaż na wykresie" aria-label="Pokaż na wykresie">
+                        <svg class="icon"><use href="#i-target"></use></svg>
+                    </button>
                     <button type="button" class="seg-btn seg-btn-danger" data-action="delete"
-                            title="Usuń segment">×</button>
+                            title="Usuń segment" aria-label="Usuń segment">
+                        <svg class="icon"><use href="#i-trash"></use></svg>
+                    </button>
                 </div>
             </div>
         `).join('');
@@ -396,14 +404,17 @@ document.addEventListener('DOMContentLoaded', function () {
                 </div>
                 <div class="seg-detail-actions">
                     <button type="button" class="btn btn-ghost btn-sm" data-action="zoom">
-                        <span aria-hidden="true">🔍</span> Pokaż
+                        <svg class="icon" aria-hidden="true"><use href="#i-target"></use></svg>
+                        Pokaż
                     </button>
                     <button type="button" class="btn btn-ghost btn-sm${resizing ? ' is-armed' : ''}"
                             data-action="resize">
-                        <span aria-hidden="true">✂️</span> ${resizing ? 'Anuluj' : 'Popraw zakres'}
+                        <svg class="icon" aria-hidden="true"><use href="#i-scissors"></use></svg>
+                        ${resizing ? 'Anuluj' : 'Popraw zakres'}
                     </button>
                     <button type="button" class="btn btn-ghost btn-sm btn-danger-ghost" data-action="delete">
-                        <span aria-hidden="true">🗑</span> Usuń
+                        <svg class="icon" aria-hidden="true"><use href="#i-trash"></use></svg>
+                        Usuń
                     </button>
                 </div>
             </div>
@@ -439,7 +450,8 @@ document.addEventListener('DOMContentLoaded', function () {
                     </button>
                     ${phase
                         ? '<button type="button" class="seg-btn seg-btn-danger" data-action="clear"' +
-                          ' title="Usuń fazę">×</button>'
+                          ' title="Usuń fazę" aria-label="Usuń fazę">' +
+                          '<svg class="icon"><use href="#i-x"></use></svg></button>'
                         : ''}
                 </div>
             </div>
@@ -643,12 +655,18 @@ document.addEventListener('DOMContentLoaded', function () {
         els.toolbar.hidden = true;
         els.hint.hidden = true;
         els.list.innerHTML =
-            '<div class="empty-state"><div class="empty-state-icon">📁</div>' +
+            '<div class="empty-state">' +
+            '<div class="empty-state-icon"><svg class="icon icon-lg">' +
+            '<use href="#i-folder"></use></svg></div>' +
             '<p>Najpierw wybierz zestaw danych,<br>aby zaznaczać segmenty.</p></div>';
         return;
     }
 
-    els.list.innerHTML = '<div class="empty-state"><p>Ładowanie segmentów…</p></div>';
+    els.list.innerHTML =
+        '<div class="empty-state">' +
+        '<div class="empty-state-icon is-busy"><svg class="icon icon-lg">' +
+        '<use href="#i-loader"></use></svg></div>' +
+        '<p>Ładowanie segmentów…</p></div>';
 
     api('GET', baseUrl)
         .then(payload => {

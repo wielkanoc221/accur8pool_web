@@ -1,17 +1,36 @@
-/* Sidebar z dwoma "wysuwanymi" panelami: głównym menu i listą plików.
-   Zmienne CSS z fallbackami (--border, --text-muted, --primary) — podmień
-   na swoje realne tokeny z dashboard.css, jeśli nazwy się nie zgadzają. */
+/* ============================================================
+   ACCUR8POOL — lewy sidebar
+   Ładuj PO dashboard.css (korzysta z jego tokenów).
 
+   Sidebar ma dwa niezależne zachowania:
+
+   1. DWA PANELE W POZIOMIE — menu główne i lista plików jeżdżą po tej
+      samej szynie (.nav-menu-track), więc lista plików nie spycha menu
+      w dół i nie trzeba jej zwijać osobno.
+
+   2. ZWIJANIE DO SZYNY IKON — przycisk w nagłówku chowa etykiety
+      i zostawia pasek 72 px z samymi ikonami. Wykres dostaje wtedy
+      ~190 px więcej szerokości, a nawigacja nadal jest pod ręką.
+      Stan trzyma klasa .sidebar-collapsed na <body> (żeby dało się nią
+      sterować układem całej strony) i localStorage (żeby przeżyła
+      przeładowanie). Na telefonie zwijanie nie obowiązuje — tam sidebar
+      jest szufladą i ma być pełnowymiarowy, patrz koniec pliku.
+   ============================================================ */
+
+/* ============================================
+   PANELE
+   ============================================ */
 .nav-viewport {
     overflow: hidden;
     flex: 1;
+    min-height: 0;
 }
 
 .nav-menu-track {
     display: flex;
     width: 200%;
     height: 100%;
-    transition: transform 0.25s ease;
+    transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 .nav-menu-track.show-files {
@@ -24,45 +43,53 @@
     box-sizing: border-box;
 }
 
-/* Przycisk "Zestawy danych" wygląda jak reszta nav-item, ale to <button> */
-#open-files-panel {
+/* „Zestawy danych” wygląda jak reszta pozycji menu, ale to <button>.
+   Selektor MUSI być klasowy, a nie #open-files-panel: identyfikator
+   wygrywał z `.nav-item.active` i zerował podświetlenie aktywnej
+   pozycji na stronie zestawów danych. */
+button.nav-item {
     width: 100%;
     text-align: left;
     background: none;
     border: none;
     cursor: pointer;
     font: inherit;
+    color: var(--sidebar-text);
 }
 
 .nav-panel-back {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--sp-2);
     width: 100%;
-    padding: 8px 12px;
-    margin-bottom: 8px;
+    padding: 8px 11px;
+    margin-bottom: var(--sp-1);
     background: none;
     border: none;
     cursor: pointer;
     font: inherit;
-    color: var(--text-muted, #64748b);
-    border-radius: 8px;
+    font-size: var(--fs-sm);
+    color: var(--sidebar-muted);
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
 }
 
 .nav-panel-back:hover {
-    background: var(--border, #e2e8f0);
+    background: var(--bg-sidebar-hi);
+    color: var(--sidebar-text-hi);
 }
 
 .nav-panel-empty {
-    padding: 12px;
-    font-size: 13px;
-    color: var(--text-muted, #64748b);
+    padding: var(--sp-3);
+    font-size: var(--fs-sm);
+    line-height: 1.5;
+    color: var(--sidebar-muted);
 }
 
 .nav-file-item {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 10px;
 }
 
 .nav-file-name {
@@ -72,21 +99,150 @@
 }
 
 .nav-file-item.active {
-    background: var(--border, #e2e8f0);
-    font-weight: 600;
+    background: rgba(37, 99, 235, 0.18);
+    color: #93c5fd;
+    font-weight: 550;
 }
 
 .nav-upload-btn {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    cursor: pointer;
-    color: var(--primary, #3b82f6);
+    color: #93c5fd;
+    border: 1px dashed rgba(147, 197, 253, 0.35);
+    margin-bottom: var(--sp-2);
 }
 
-.logout-form { margin: 0; }
-.btn-logout {
-    border: none;
+.nav-upload-btn:hover {
+    background: rgba(37, 99, 235, 0.14);
+    border-color: rgba(147, 197, 253, 0.6);
+    color: #bfdbfe;
+}
+
+/* ============================================
+   PRZYCISK ZWIJANIA
+   ============================================ */
+.sidebar-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--sidebar-muted);
     cursor: pointer;
-    font-family: inherit;
+    transition: var(--transition);
+}
+
+.sidebar-toggle:hover {
+    background: var(--bg-sidebar-hi);
+    border-color: var(--sidebar-line);
+    color: var(--sidebar-text-hi);
+}
+
+/* Ikona mówi, co się STANIE po kliknięciu: przy rozwiniętym sidebarze
+   „zamknij panel”, przy zwiniętym „otwórz panel”. */
+.sidebar-toggle .icon-open { display: none; }
+
+body.sidebar-collapsed .sidebar-toggle .icon-open { display: block; }
+body.sidebar-collapsed .sidebar-toggle .icon-close { display: none; }
+
+/* ============================================
+   STAN ZWINIĘTY
+
+   Wszystko, co jest tekstem, znika; zostają ikony wyśrodkowane
+   w szynie. Elementy nie są usuwane z drzewa (display: none tylko
+   na etykietach), więc czytnik ekranu nadal ma pełne nazwy —
+   przyciski dostają z JS-a atrybut title i aria-label.
+   ============================================ */
+body.sidebar-collapsed .sidebar {
+    width: var(--sidebar-w-rail);
+}
+
+body.sidebar-collapsed .sidebar-header {
+    padding: 0;
+    justify-content: center;
+}
+
+body.sidebar-collapsed .logo { display: none; }
+
+body.sidebar-collapsed .nav-menu { padding: var(--sp-3) var(--sp-2); }
+
+body.sidebar-collapsed .nav-section {
+    /* Sam nagłówek sekcji nie mieści się w szynie — zostaje po nim
+       kreska, żeby grupy nadal były rozdzielone. */
+    height: 1px;
+    padding: 0;
+    margin: var(--sp-3) var(--sp-2);
+    overflow: hidden;
+    color: transparent;
+    background: var(--sidebar-line);
+}
+
+body.sidebar-collapsed .nav-item,
+body.sidebar-collapsed .nav-panel-back {
+    justify-content: center;
+    padding: 11px 0;
+    gap: 0;
+}
+
+body.sidebar-collapsed .nav-item.active::before { left: -8px; }
+
+body.sidebar-collapsed .nav-label,
+body.sidebar-collapsed .nav-file-name,
+body.sidebar-collapsed .nav-panel-back span:not(.nav-icon),
+body.sidebar-collapsed .nav-panel-empty,
+body.sidebar-collapsed .user-info,
+body.sidebar-collapsed .btn-logout .btn-label {
+    display: none;
+}
+
+body.sidebar-collapsed .sidebar-footer { padding: var(--sp-2); align-items: center; }
+
+body.sidebar-collapsed .user-card {
+    padding: 0;
+    background: transparent;
+    justify-content: center;
+}
+
+body.sidebar-collapsed .btn-logout { padding: 8px 0; }
+
+/* Zwinięta szyna nie ma miejsca na listę plików — panel plików
+   sprowadza się do samych ikon dokumentów, co niczego nie mówi.
+   Kliknięcie „Zestawy danych” w tym stanie rozwija sidebar (JS),
+   więc panel nigdy nie jest oglądany w wersji zwiniętej. */
+body.sidebar-collapsed .nav-menu-track { transition: none; }
+
+/* ============================================
+   TELEFON
+
+   Szuflada zawsze pełnowymiarowa: zwinięta szyna nad treścią byłaby
+   paskiem ikon bez nazw na środku ekranu.
+   ============================================ */
+@media (max-width: 768px) {
+    body.sidebar-collapsed .sidebar { width: 290px; max-width: 86vw; }
+    body.sidebar-collapsed .sidebar-header { padding: 0 var(--sp-4) 0 var(--sp-5); justify-content: flex-start; }
+    body.sidebar-collapsed .logo { display: flex; }
+    body.sidebar-collapsed .nav-menu { padding: var(--sp-3); }
+    body.sidebar-collapsed .nav-item,
+    body.sidebar-collapsed .nav-panel-back { justify-content: flex-start; padding: 13px 12px; gap: var(--sp-3); }
+    body.sidebar-collapsed .nav-section {
+        height: auto;
+        padding: var(--sp-4) var(--sp-3) var(--sp-2);
+        margin: 0;
+        color: var(--sidebar-muted);
+        background: none;
+    }
+    body.sidebar-collapsed .nav-label,
+    body.sidebar-collapsed .nav-file-name,
+    body.sidebar-collapsed .nav-panel-back span:not(.nav-icon),
+    body.sidebar-collapsed .nav-panel-empty,
+    body.sidebar-collapsed .user-info,
+    body.sidebar-collapsed .btn-logout .btn-label { display: block; }
+    body.sidebar-collapsed .sidebar-footer { padding: var(--sp-3); align-items: stretch; }
+    body.sidebar-collapsed .user-card { padding: 9px 10px; background: rgba(148, 163, 184, 0.08); justify-content: flex-start; }
+
+    /* W szufladzie przycisk zwijania nie ma sensu — zamyka ją tło i „×” */
+    .sidebar-toggle { display: none; }
 }

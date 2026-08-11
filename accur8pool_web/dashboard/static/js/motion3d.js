@@ -554,26 +554,26 @@ document.addEventListener('DOMContentLoaded', function () {
             seekTo(0);
         }).catch(err => console.error('Plotly 3D:', err));
 
-        // ---- opisy ----
-        // Podtytuł ma mówić wprost, co jest POMIAREM, a co rekonstrukcją.
-        // Orientacja jest mierzona; tor nadgarstka powstaje z dopasowanej
-        // dźwigni, więc razem z nim idzie jakość tego dopasowania i bok
-        // sceny — bez nich nie da się ocenić, czy ogląda się centymetry,
-        // czy milimetry, ani czy model w ogóle miał się o co zaczepić.
+        // ---- opis ----
+        // Podtytuł mówi TYLKO to, co widz musi wiedzieć, żeby wiedzieć, na
+        // co patrzy: które uderzenie jest odtwarzane. Parametry rekonstrukcji
+        // (model dźwigni, bok sceny, zgodność wektora obrotu z żyroskopem)
+        // to diagnostyka — czytelna dla dwóch osób w projekcie, a dla reszty
+        // ściana tekstu w miejscu, gdzie ma być nazwa. Cała ta diagnostyka
+        // idzie więc do atrybutu title (dymek pod kursorem) i do konsoli,
+        // czyli zostaje dostępna, ale nie zajmuje ekranu.
         if (els.label) {
-            const czesci = [req.name, meta.label];
-            if (meta.span_cm) czesci.push('scena ' + meta.span_cm.toFixed(1) + ' cm');
-            if (meta.stride > 1) czesci.push('co ' + meta.stride + '. próbka');
-            if (meta.gaps) czesci.push(meta.gaps + ' × przerwa w nagraniu (skrócona)');
-            // Zgodność wektora obrotu z żyroskopem — tłumaczy szarpiącą
-            // się bryłę zegarka, więc ma być widoczna, a nie tylko
-            // w logach. Zastrzeżenia o pochodzeniu pliku już nie ma:
-            // źródłem jest zawsze wersja przygotowana.
+            els.label.textContent = req.name;
+
+            const szczegoly = [meta.label];
+            if (meta.span_cm) szczegoly.push('scena ' + meta.span_cm.toFixed(1) + ' cm');
+            if (meta.stride > 1) szczegoly.push('co ' + meta.stride + '. próbka');
+            if (meta.gaps) szczegoly.push(meta.gaps + ' × przerwa w nagraniu (skrócona)');
             if (meta.rot_vs_gyro !== null && meta.rot_vs_gyro > 0.35) {
-                czesci.push('rozjazd z żyroskopem ' +
-                            (meta.rot_vs_gyro * 100).toFixed(0) + '%');
+                szczegoly.push('rozjazd z żyroskopem ' +
+                               (meta.rot_vs_gyro * 100).toFixed(0) + '%');
             }
-            els.label.textContent = czesci.join(' · ');
+            els.label.title = szczegoly.join(' · ');
         }
 
         if (els.statTime) els.statTime.textContent = meta.duration.toFixed(2) + ' s';
@@ -788,8 +788,14 @@ document.addEventListener('DOMContentLoaded', function () {
     function syncPlayButton() {
         if (!els.play) return;
         els.play.classList.toggle('is-playing', playing);
-        const ikona = els.play.querySelector('[aria-hidden]');
-        if (ikona) ikona.textContent = playing ? '⏸' : '▶';
+        // Ikona to <svg><use href="#i-…"> — podmieniamy cel odnośnika.
+        // href i xlink:href razem, bo starsze Safari czyta tylko drugi.
+        const use = els.play.querySelector('.icon use');
+        if (use) {
+            const id = playing ? '#i-pause' : '#i-play';
+            use.setAttribute('href', id);
+            use.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', id);
+        }
         if (els.playLabel) els.playLabel.textContent = playing ? 'Pauza' : 'Odtwórz';
     }
 

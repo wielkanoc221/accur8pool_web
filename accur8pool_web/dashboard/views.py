@@ -41,6 +41,36 @@ TARGET_BUCKETS = 2500
 
 MAX_UPLOAD_SIZE = 300 * 1024 * 1024
 
+# ============================================================
+#  WYGLĄD WYKRESU 2D
+# ============================================================
+
+# Ten sam krój, którym pisany jest interfejs — inaczej podpisy osi
+# wyglądają jak wklejone z innego programu.
+PLOT_FONT = ("Inter, system-ui, -apple-system, 'Segoe UI', Roboto, "
+             "'Helvetica Neue', Arial, sans-serif")
+
+# Kolejność serii na wykresie. Domyślna paleta Plotly ma dwie pary
+# odcieni, których nie rozróżnia osoba z deuteranopią (a przy kilkunastu
+# przebiegach IMU na jednym wykresie to nie jest szczegół). Ta kolejność
+# jest sprawdzona pod kątem rozróżnialności sąsiadujących kolorów
+# w każdym z trzech typów daltonizmu — kolejności NIE zmieniać bez
+# ponownego sprawdzenia, bo to ona odpowiada za rozróżnialność, a nie
+# same kolory.
+#
+# Kolor sam w sobie nie identyfikuje serii: nazwę niesie legenda, przez
+# którą serie się też włącza i wyłącza.
+SERIES_COLORWAY = [
+    "#2a78d6",  # niebieski
+    "#eb6834",  # pomarańczowy
+    "#1baf7a",  # morski
+    "#eda100",  # żółty
+    "#e87ba4",  # magenta
+    "#008300",  # zielony
+    "#4a3aa7",  # fioletowy
+    "#e34948",  # czerwony
+]
+
 # Górna granica numeru wiersza przyjmowanego w granicach segmentu.
 # To zakres PositiveIntegerField — bez tego sprawdzenia zbłąkane
 # Infinity z JS-a przechodziłoby aż do bazy.
@@ -311,17 +341,60 @@ def _build_figure(series):
         # punktów zamula przewijanie i zoom, szczególnie na telefonie.
         fig.add_trace(go.Scattergl(
             x=s["x"], y=s["y"], name=name, mode="lines",
-            line=dict(width=1.2),
+            line=dict(width=1.6),
             hovertemplate="%{y:.4f}<extra>" + name + "</extra>",
         ))
 
     fig.update_layout(
         template="plotly_white",
+        colorway=SERIES_COLORWAY,
         hovermode="closest",
-        margin=dict(l=48, r=16, t=16, b=40),
-        xaxis=dict(title="Indeks"),
-        yaxis=dict(title="Wartość znormalizowana"),
-        legend=dict(orientation="v", x=1.02, y=1, xanchor="left", yanchor="top"),
+        # Wykres siedzi w karcie, która ma własne obramowanie i nagłówek —
+        # figura nie dokłada do tego drugiej ramki ani tytułu.
+        margin=dict(l=56, r=8, t=8, b=44),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font=dict(family=PLOT_FONT, size=12, color="#475569"),
+        xaxis=dict(
+            title=dict(text="Indeks", font=dict(size=11.5, color="#64748b")),
+            gridcolor="#eef2f7",
+            zerolinecolor="#e3e8ef",
+            linecolor="#e3e8ef",
+            ticks="outside",
+            tickcolor="#e3e8ef",
+            ticklen=4,
+            tickfont=dict(size=11, color="#64748b"),
+        ),
+        yaxis=dict(
+            title=dict(text="Wartość znormalizowana", font=dict(size=11.5, color="#64748b")),
+            gridcolor="#eef2f7",
+            zerolinecolor="#e3e8ef",
+            linecolor="#e3e8ef",
+            ticks="outside",
+            tickcolor="#e3e8ef",
+            ticklen=4,
+            tickfont=dict(size=11, color="#64748b"),
+        ),
+        # Legenda jest jedynym miejscem, w którym seria dostaje NAZWĘ —
+        # sam kolor nie wystarcza do rozpoznania przebiegu, a część
+        # kolorów jest jasna. Klikanie w nią włącza i wyłącza serie,
+        # więc pozycje muszą być czytelne, nie drobne.
+        legend=dict(
+            orientation="v",
+            x=1.01, y=1, xanchor="left", yanchor="top",
+            font=dict(size=11.5, color="#475569"),
+            bgcolor="rgba(255,255,255,0.85)",
+            bordercolor="#e3e8ef",
+            borderwidth=1,
+            itemsizing="constant",
+            itemwidth=30,
+            tracegroupgap=4,
+        ),
+        hoverlabel=dict(
+            bgcolor="#0f172a",
+            bordercolor="#0f172a",
+            font=dict(family=PLOT_FONT, size=12, color="#f8fafc"),
+        ),
         uirevision="keep",  # zoom przeżywa aktualizacje danych
     )
     return fig

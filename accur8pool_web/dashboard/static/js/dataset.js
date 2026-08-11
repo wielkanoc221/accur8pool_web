@@ -17,7 +17,8 @@ function setupUpload() {
 
         try {
             const ds = await uploadDatasetFile(file);
-            status.innerHTML = `Dodano „${escapeHtml(file.name)}”. <a href="${escapeHtml(ds.url)}" target="_self">Otwórz →</a>`;
+            status.innerHTML = `Dodano „${escapeHtml(file.name)}”. ` +
+                `<a href="${escapeHtml(ds.url)}" target="_self">Otwórz zestaw</a>`;
             status.className = 'upload-status upload-status-ok';
             loadDatasets(); // odśwież listę o nowo dodany plik
         } catch (err) {
@@ -41,7 +42,9 @@ async function loadDatasets() {
 
     list.innerHTML = `
         <div class="empty-state">
-            <div class="empty-state-icon">⏳</div>
+            <div class="empty-state-icon is-busy">
+                <svg class="icon icon-lg"><use href="#i-loader"></use></svg>
+            </div>
             <p>Ładowanie zestawów danych…</p>
         </div>`;
 
@@ -59,7 +62,9 @@ async function loadDatasets() {
     } catch (err) {
         list.innerHTML = `
             <div class="empty-state">
-                <div class="empty-state-icon">⚠️</div>
+                <div class="empty-state-icon is-error">
+                    <svg class="icon icon-lg"><use href="#i-alert"></use></svg>
+                </div>
                 <p>Nie udało się pobrać zestawów danych.<br>${escapeHtml(err.message)}</p>
             </div>`;
     }
@@ -71,8 +76,11 @@ function renderDatasets(datasets) {
     if (!datasets || datasets.length === 0) {
         list.innerHTML = `
             <div class="empty-state">
-                <div class="empty-state-icon">📭</div>
-                <p>Nie masz jeszcze żadnych zestawów danych.</p>
+                <div class="empty-state-icon">
+                    <svg class="icon icon-lg"><use href="#i-inbox"></use></svg>
+                </div>
+                <p>Nie masz jeszcze żadnych zestawów danych.<br>
+                   Prześlij pierwszy plik CSV, aby zacząć.</p>
             </div>`;
         return;
     }
@@ -80,7 +88,7 @@ function renderDatasets(datasets) {
     list.innerHTML = datasets.map(ds => `
         <a class="dataset-card${ds.id === window.currentDatasetId ? ' active' : ''}"
            href="${escapeHtml(ds.url)}" target="_self">
-            <div class="dataset-card-icon">📄</div>
+            <div class="dataset-card-icon"><svg class="icon icon-lg"><use href="#i-file"></use></svg></div>
             <div class="dataset-card-info">
                 <div class="dataset-card-name">${escapeHtml(ds.name)}</div>
                 <div class="dataset-card-meta">
@@ -88,7 +96,7 @@ function renderDatasets(datasets) {
                     ${ds.updated_at ? ' · ' + escapeHtml(ds.updated_at) : ''}
                 </div>
             </div>
-            <div class="dataset-card-arrow">→</div>
+            <div class="dataset-card-arrow"><svg class="icon"><use href="#i-chevron-right"></use></svg></div>
         </a>
     `).join('');
 }
