@@ -1,413 +1,147 @@
+"""Widoki dashboardu — cienka warstwa nad HTTP.
+
+Każdy widok robi dokładnie trzy rzeczy: sprawdza wejście, woła jedną
+usługę i zamienia jej wynik na odpowiedź. Cała reszta ma swoje miejsce:
+
+    storage.py         pliki użytkownika (raw_data / prepared_data)
+    series.py          wczytanie kolumn i decymacja do rozdzielczości ekranu
+    charts.py          wygląd wykresu 2D
+    segments.py        segmenty, fazy i walidacja zaznaczenia
+    motion_service.py  parametry i pamięć podręczna animacji 3D
+    motion3d/          sama rekonstrukcja ruchu
+
+Endpointy API są klasami, bo każdy z nich obsługuje kilka metod HTTP —
+Django rozdziela je samo, więc znika ręczne rozgałęzianie po
+request.method i powtarzane HttpResponseNotAllowed. Strony (dashboard,
+lista zestawów, wylogowanie) zostają funkcjami: nie mają czego dzielić.
+"""
+
+from __future__ import annotations
+
 import json
 import logging
 import math
-from functools import lru_cache
 from pathlib import Path
-from urllib.parse import quote
 
-import numpy as np
 import pandas as pd
-import plotly.graph_objects as go
 from django.conf import settings
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
-from django.http import JsonResponse, HttpResponseBadRequest, HttpResponseNotAllowed
-from django.shortcuts import render, redirect
-from django.utils.text import get_valid_filename
+from django.contrib.auth.mixins import LoginRequiredMixin
+from django.http import HttpResponseBadRequest, JsonResponse
+from django.shortcuts import redirect, render
+from django.views import View
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.views.decorators.http import require_POST
 
-from . import motion3d
+from . import charts, motion3d
 from .models import Dataset, Segment, SubSegment
+from .motion_service import MotionOptions, scene_for_segment
+from .segments import (
+    RowRange,
+    phase_types_payload,
+    segment_range,
+    segments_payload,
+    trim_phases_to_segment,
+)
+from .series import TARGET_BUCKETS, Series
+from .storage import DatasetStorage, dataset_meta
 
 logger = logging.getLogger(__name__)
 
 # Surowe pliki tak, jak przyszły z uploadu. To jest WYŁĄCZNIE wejście dla
 # przygotowania danych — żaden widok już z tego drzewa nie czyta.
 DATA_DIR = Path(
-    getattr(settings, "ACCUR8POOL_DATA_DIR", Path(settings.BASE_DIR) / "new_data" / "raw_data")
+    getattr(settings, "ACCUR8POOL_DATA_DIR",
+            Path(settings.BASE_DIR) / "new_data" / "raw_data")
 )
 
 # Te same pliki po transform_raw_df — pod tą samą nazwą i tym samym
 # <user_id>, tyle że w drugim drzewie. TO JEST JEDYNE ŹRÓDŁO DANYCH dla
-# aplikacji: wykres 2D, doczytywanie zakresów, animacja 3D i dalsze
-# przetwarzanie widzą dokładnie ten sam plik.
+# aplikacji: wykres 2D, doczytywanie zakresów i animacja 3D widzą dokładnie
+# ten sam plik.
 PREPARED_DATA_DIR = Path(
     getattr(settings, "ACCUR8POOL_PREPARED_DATA_DIR",
             Path(settings.BASE_DIR) / "new_data" / "prepared_data")
 )
 
-TARGET_BUCKETS = 2500
-
 MAX_UPLOAD_SIZE = 300 * 1024 * 1024
 
+# Granice liczby kubełków, o którą może poprosić przeglądarka. Dolna, żeby
+# wykres nie zrobił się schodkowy; górna, żeby nie wysyłać więcej punktów,
+# niż ma pikseli najszerszy monitor.
+MIN_BUCKETS, MAX_BUCKETS = 200, 6000
+
+# Margines doczytywania: użytkownik przesuwa wykres, więc bierzemy trochę
+# poza widoczny zakres — inaczej każde drgnięcie myszą to nowe żądanie.
+RANGE_MARGIN = 0.15
+
+
+def storage_for(user) -> DatasetStorage:
+    """Katalogi czytamy przy KAŻDYM żądaniu, a nie raz przy imporcie —
+    dzięki temu testy podmieniają je jednym mock.patch.object(views, …)."""
+    return DatasetStorage(user, DATA_DIR, PREPARED_DATA_DIR)
+
+
 # ============================================================
-#  WYGLĄD WYKRESU 2D
+#  STRONY
 # ============================================================
 
-# Ten sam krój, którym pisany jest interfejs — inaczej podpisy osi
-# wyglądają jak wklejone z innego programu.
-PLOT_FONT = ("Inter, system-ui, -apple-system, 'Segoe UI', Roboto, "
-             "'Helvetica Neue', Arial, sans-serif")
-
-# Kolejność serii na wykresie. Domyślna paleta Plotly ma dwie pary
-# odcieni, których nie rozróżnia osoba z deuteranopią (a przy kilkunastu
-# przebiegach IMU na jednym wykresie to nie jest szczegół). Ta kolejność
-# jest sprawdzona pod kątem rozróżnialności sąsiadujących kolorów
-# w każdym z trzech typów daltonizmu — kolejności NIE zmieniać bez
-# ponownego sprawdzenia, bo to ona odpowiada za rozróżnialność, a nie
-# same kolory.
-#
-# Kolor sam w sobie nie identyfikuje serii: nazwę niesie legenda, przez
-# którą serie się też włącza i wyłącza.
-SERIES_COLORWAY = [
-    "#2a78d6",  # niebieski
-    "#eb6834",  # pomarańczowy
-    "#1baf7a",  # morski
-    "#eda100",  # żółty
-    "#e87ba4",  # magenta
-    "#008300",  # zielony
-    "#4a3aa7",  # fioletowy
-    "#e34948",  # czerwony
-]
-
-# Górna granica numeru wiersza przyjmowanego w granicach segmentu.
-# To zakres PositiveIntegerField — bez tego sprawdzenia zbłąkane
-# Infinity z JS-a przechodziłoby aż do bazy.
-MAX_ROW_INDEX = 2_147_483_647
-
-# Klatki animacji 3D. `fps` NIE jest tempem docelowym, tylko GÓRNYM
-# LIMITEM gęstości próbek (patrz docstring motion3d.build_motion): klatka
-# to zawsze prawdziwy wiersz CSV, a limit decyduje tylko o tym, czy przy
-# szybkim zapisie brać co drugą albo co czwartą.
-#
-# Bez parametru w zapytaniu limitu NIE MA. Przeglądarka celowo go nie
-# wysyła, bo odtwarzacz dobiera klatkę po czasie z zegara i chce widzieć
-# to, co czujnik zmierzył — razem z nierównym odstępem między pomiarami.
-# Rozmiaru odpowiedzi i tak pilnuje motion3d.MAX_FRAMES.
-MIN_FPS = 5.0
-MAX_FPS = 1000.0
+@require_POST
+def logout_view(request):
+    logout(request)
+    return redirect("login")
 
 
-def _user_dir(user):
-    return DATA_DIR / str(user.pk)
+@login_required
+@ensure_csrf_cookie
+def dashboard(request, filename=None):
+    """Wykres 2D wybranego zestawu — albo powód, dla którego go nie ma."""
+    storage = storage_for(request.user)
+    dataset = storage.resolve(filename)
 
+    if dataset is None:
+        return _dashboard_page(
+            request,
+            error=(f"Nie znaleziono pliku: {filename}" if filename else None),
+        )
 
-def _user_prepared_dir(user):
-    return PREPARED_DATA_DIR / str(user.pk)
-
-
-def _dataset_path(user, dataset):
-    """JEDYNY plik, z którego czyta aplikacja: wersja przygotowana.
-
-    Nie ma tu zapasu na plik surowy — i to jest cała zmiana względem
-    poprzedniej wersji. Wykres 2D, doczytywanie zakresów i animacja 3D
-    dostają dokładnie ten sam plik, więc numer wiersza znaczy wszędzie to
-    samo, a segment zaznaczony na wykresie wskazuje w animacji ten sam
-    fragment ruchu. Przy dwóch źródłach o różnej liczbie kolumn i (przy
-    plikach niepełnych) różnej długości nie było to zagwarantowane.
-
-    Zestaw bez wersji przygotowanej nie jest w ogóle pokazywany — patrz
-    _resolve_dataset i upload_dataset — więc ta ścieżka praktycznie
-    zawsze istnieje. Wołający i tak sprawdzają .exists(), bo plik może
-    zniknąć z dysku między żądaniami.
-
-    Rekonstrukcja 3D też czyta stąd. Było to możliwe dopiero po tym, jak
-    transform_raw_df przestał filtrować rot* — filtr rozjeżdżał składowe
-    kwaternionu z warunkiem |q| = 1 i psuł orientację (szczegóły przy
-    COLUMNS_TO_FILTER_5_CUT_OFF w prepare_raw_data).
-    """
-    return _user_prepared_dir(user) / dataset.filename
-
-
-def _prepare_raw_data_module():
-    """Moduł z transformacją danych, spod TEJ nazwy, pod którą da się go
-    zaimportować.
-
-    Ten sam katalog jest widoczny pod dwiema nazwami, zależnie od tego,
-    co trafiło na sys.path: `utils.data_processing…`, gdy uruchamia się
-    przez manage.py (katalog projektu jest wtedy korzeniem — stąd biorą
-    się nazwy aplikacji `dashboard` i `account` w INSTALLED_APPS), albo
-    `accur8pool_web.utils.data_processing…`, gdy na ścieżce jest katalog
-    NAD projektem. Obie próby są tanie i wykonują się raz na upload.
-
-    Poprzednio import był wpisany na jedną z tych postaci i cichł
-    w `except Exception` razem z błędami danych. Skutek był taki, że przy
-    złym ustawieniu ścieżki ŻADEN plik nie dostawał wersji przygotowanej,
-    a odpowiedź uploadu meldowała tylko `prepared: false` — nie do
-    odróżnienia od pliku bez wymaganych kolumn.
-
-    Import jest leniwy (w funkcji, nie na górze modułu) celowo:
-    transform_raw_df ciągnie za sobą scipy, a to zależność potrzebna
-    wyłącznie tutaj — bez niej reszta dashboardu ma działać normalnie.
-    """
-    try:
-        from utils.data_processing import prepare_raw_data
-    except ImportError:
-        from accur8pool_web.utils.data_processing import prepare_raw_data
-    return prepare_raw_data
-
-
-def _prepare_uploaded_file(user, raw_path, filename):
-    """Liczy wersję przygotowaną świeżo wgranego pliku.
-
-    Zwraca (ścieżka, None) po udanym przygotowaniu albo (None, komunikat)
-    po nieudanym. Nieudana transformacja UNIEWAŻNIA CAŁY UPLOAD: skoro
-    aplikacja czyta wyłącznie wersję przygotowaną, plik bez niej nie miałby
-    czego pokazać, a zestaw widniejący na liście i otwierający się pustym
-    błędem jest gorszy niż odmowa przyjęcia pliku.
-
-    Komunikat wraca do przeglądarki, więc niesie powód (np. których kolumn
-    brakuje) — pełny ślad wyjątku zostaje w logu.
-    """
-    try:
-        prepare_raw_data = _prepare_raw_data_module()
-    except ImportError:
-        # To jest awaria wdrożenia, a nie wada wgranego pliku — mówimy
-        # to wprost, zamiast sugerować użytkownikowi poprawianie danych.
-        logger.exception("Moduł przygotowania danych jest nieosiągalny")
-        return None, "Przygotowanie danych jest niedostępne na serwerze."
+    path = storage.path_for(dataset)
+    if not path.exists():
+        logger.warning("Brak pliku na dysku: %s (dataset id=%s)", path, dataset.pk)
+        return _dashboard_page(request, dataset=dataset,
+                               error="Plik nie istnieje na serwerze. Prześlij go ponownie.")
 
     try:
-        path = prepare_raw_data.prepare_raw_file_and_save(
-            raw_path, _user_prepared_dir(user), filename)
-    except prepare_raw_data.WrongColumnsException as exc:
-        logger.info("Plik %s nie nadaje się do przygotowania: %s", raw_path, exc)
-        return None, str(exc)
+        series = Series.from_csv(path)
+    except pd.errors.EmptyDataError:
+        return _dashboard_page(request, dataset=dataset,
+                               error="Plik CSV nie zawiera danych.")
     except Exception:
-        logger.exception("Nie udało się przygotować pliku: %s", raw_path)
-        return None, "Nie udało się przygotować danych z tego pliku."
+        logger.exception("Nie udało się wczytać CSV: %s", path)
+        return _dashboard_page(request, dataset=dataset,
+                               error="Nie udało się odczytać pliku CSV.")
 
-    return path, None
+    if not series:
+        return _dashboard_page(request, dataset=dataset, columns_count=0,
+                               error="Plik nie zawiera kolumn liczbowych do narysowania.")
 
-
-def _resolve_dataset(user, filename):
-    """Zwraca Dataset NALEŻĄCY DO user I MAJĄCY wersję przygotowaną.
-
-    Nazwa z URL-a nigdy nie trafia wprost do ścieżki na dysku — zawsze
-    przechodzi przez bazę.
-
-    Filtr po istnieniu pliku przygotowanego jest tym, co realizuje zasadę
-    „bez prepared zestawu nie widać”. Sam upload nie zakłada już wpisu bez
-    wersji przygotowanej, ale zestawy sprzed tej zmiany (i takie, których
-    plik ktoś usunął z dysku) nadal siedzą w bazie — a wpuszczone dalej
-    kończyłyby się pustym wykresem zamiast czytelnego „nie znaleziono”.
-    """
-    qs = Dataset.objects.filter(owner=user)
-    if filename:
-        qs = qs.filter(filename=filename)
-
-    for dataset in qs:
-        if _dataset_path(user, dataset).exists():
-            return dataset
-    return None
-
-
-def _count_records(path):
-    try:
-        with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-            return max(sum(1 for _ in fh) - 1, 0)
-    except OSError:
-        return None
-
-
-def _dataset_meta(dataset, path=None, records=None):
-    if records is None and path is not None:
-        records = _count_records(path)
-    return {
-        "id": dataset.filename,
-        "name": dataset.filename,
-        "records": records,
-        "updated_at": dataset.uploaded_at.strftime("%Y-%m-%d %H:%M"),
-        "url": f"/dashboard/{quote(dataset.filename)}/",
-    }
-
-
-# ============================================================
-#  WCZYTYWANIE I CACHE
-# ============================================================
-
-@lru_cache(maxsize=2)
-def _load_series_cached(path_str, mtime, size):
-    """Wczytuje CSV i zwraca gotowe do rysowania, znormalizowane serie.
-
-    Klucz cache zawiera mtime i rozmiar pliku, więc podmiana pliku na
-    dysku unieważnia wpis sama z siebie — nie trzeba niczego czyścić.
-
-    maxsize=2 jest celowo małe: jedna ramka z pliku 300 MB potrafi zająć
-    kilka GB RAM-u. Trzymamy float32 zamiast float64 (połowa pamięci,
-    a i tak rysujemy z dokładnością do piksela) i wyłącznie kolumny
-    liczbowe.
-    """
-    df = pd.read_csv(path_str)
-
-    numeric = df.select_dtypes(include=["number"])
-    numeric = numeric.drop(columns=[c for c in ("index",) if c in numeric.columns])
-
-    names = list(numeric.columns)
-    if not names:
-        return {"names": [], "values": np.empty((0, 0), dtype=np.float32), "n": 0}
-
-    values = numeric.to_numpy(dtype=np.float32, copy=True)
-
-    col_min = np.nanmin(values, axis=0)
-    col_max = np.nanmax(values, axis=0)
-    span = col_max - col_min
-    flat = span == 0
-    span[flat] = 1.0
-    values = (values - col_min) / span
-    values[:, flat] = 0.0
-
-    return {"names": names, "values": values, "n": values.shape[0]}
-
-
-def _load_series(path: Path):
-    st = path.stat()
-    return _load_series_cached(str(path), st.st_mtime_ns, st.st_size)
-
-
-# ============================================================
-#  DECYMACJA MIN/MAX
-# ============================================================
-
-def _minmax_indices(column: np.ndarray, lo: int, hi: int, buckets: int) -> np.ndarray:
-    """Indeksy punktów do narysowania dla jednej serii w zakresie [lo, hi).
-
-    Dzielimy zakres na kubełki i z każdego bierzemy MINIMUM I MAKSIMUM.
-    To jest cała różnica względem brania co n-tego wiersza: pojedynczy
-    pik trwający jedną próbkę zostaje zachowany co do wartości, bo jest
-    ekstremum swojego kubełka. Przy stride ten sam pik znika, jeśli nie
-    trafi akurat w wielokrotność kroku — a przy danych z akcelerometru
-    to właśnie piki są tym, na co się patrzy.
-
-    Ta sama metoda jest używana w oscyloskopach cyfrowych i edytorach
-    audio do rysowania przebiegów.
-    """
-    n = hi - lo
-    if n <= 0:
-        return np.empty(0, dtype=np.int64)
-
-    # Mniej punktów niż miejsca na wykresie — rysujemy wszystko bez zmian
-    if n <= buckets * 2:
-        return np.arange(lo, hi, dtype=np.int64)
-
-    edges = np.linspace(lo, hi, buckets + 1).astype(np.int64)
-    out = np.empty(buckets * 2, dtype=np.int64)
-
-    for i in range(buckets):
-        s, e = edges[i], edges[i + 1]
-        if e <= s:
-            out[2 * i] = out[2 * i + 1] = s
-            continue
-        seg = column[s:e]
-        if np.all(np.isnan(seg)):
-            out[2 * i] = out[2 * i + 1] = s
-            continue
-        out[2 * i] = s + int(np.nanargmin(seg))
-        out[2 * i + 1] = s + int(np.nanargmax(seg))
-
-    # unique sortuje i usuwa duplikaty (kubełek, w którym min == max)
-    return np.unique(out)
-
-
-def _series_payload(series, name_filter=None, lo=0, hi=None, buckets=TARGET_BUCKETS):
-    """Zwraca {nazwa: {"x": [...], "y": [...]}} po decymacji."""
-    n = series["n"]
-    hi = n if hi is None else min(hi, n)
-    lo = max(0, lo)
-
-    out = {}
-    for j, name in enumerate(series["names"]):
-        if name_filter is not None and name not in name_filter:
-            continue
-        col = series["values"][:, j]
-        idx = _minmax_indices(col, lo, hi, buckets)
-        out[name] = {
-            "x": idx.tolist(),
-            # NaN nie przechodzi przez JSON — None rysuje się jako przerwa
-            "y": [None if math.isnan(v) else float(v) for v in col[idx]],
-        }
-    return out
-
-
-def _build_figure(series):
-    """Figura startowa: cały przebieg w rozdzielczości ekranu."""
-    payload = _series_payload(series)
-
-    fig = go.Figure()
-    for name, s in payload.items():
-        # Scattergl zamiast Scatter — rysowanie idzie przez WebGL na karcie
-        # graficznej. Zwykły Scatter przy kilkunastu seriach po kilka tysięcy
-        # punktów zamula przewijanie i zoom, szczególnie na telefonie.
-        fig.add_trace(go.Scattergl(
-            x=s["x"], y=s["y"], name=name, mode="lines",
-            line=dict(width=1.6),
-            hovertemplate="%{y:.4f}<extra>" + name + "</extra>",
-        ))
-
-    fig.update_layout(
-        template="plotly_white",
-        colorway=SERIES_COLORWAY,
-        hovermode="closest",
-        # Wykres siedzi w karcie, która ma własne obramowanie i nagłówek —
-        # figura nie dokłada do tego drugiej ramki ani tytułu.
-        margin=dict(l=56, r=8, t=8, b=44),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        font=dict(family=PLOT_FONT, size=12, color="#475569"),
-        xaxis=dict(
-            title=dict(text="Indeks", font=dict(size=11.5, color="#64748b")),
-            gridcolor="#eef2f7",
-            zerolinecolor="#e3e8ef",
-            linecolor="#e3e8ef",
-            ticks="outside",
-            tickcolor="#e3e8ef",
-            ticklen=4,
-            tickfont=dict(size=11, color="#64748b"),
-        ),
-        yaxis=dict(
-            title=dict(text="Wartość znormalizowana", font=dict(size=11.5, color="#64748b")),
-            gridcolor="#eef2f7",
-            zerolinecolor="#e3e8ef",
-            linecolor="#e3e8ef",
-            ticks="outside",
-            tickcolor="#e3e8ef",
-            ticklen=4,
-            tickfont=dict(size=11, color="#64748b"),
-        ),
-        # Legenda jest jedynym miejscem, w którym seria dostaje NAZWĘ —
-        # sam kolor nie wystarcza do rozpoznania przebiegu, a część
-        # kolorów jest jasna. Klikanie w nią włącza i wyłącza serie,
-        # więc pozycje muszą być czytelne, nie drobne.
-        legend=dict(
-            orientation="v",
-            x=1.01, y=1, xanchor="left", yanchor="top",
-            font=dict(size=11.5, color="#475569"),
-            bgcolor="rgba(255,255,255,0.85)",
-            bordercolor="#e3e8ef",
-            borderwidth=1,
-            itemsizing="constant",
-            itemwidth=30,
-            tracegroupgap=4,
-        ),
-        hoverlabel=dict(
-            bgcolor="#0f172a",
-            bordercolor="#0f172a",
-            font=dict(family=PLOT_FONT, size=12, color="#f8fafc"),
-        ),
-        uirevision="keep",  # zoom przeżywa aktualizacje danych
+    return _dashboard_page(
+        request,
+        dataset=dataset,
+        graph_data=charts.build_figure(series).to_plotly_json(),
+        columns_count=len(series.names),
+        total_points=series.rows,
+        # Same nazwy kolumn wystarczą, żeby wiedzieć, czy zakładka 3D ma
+        # sens — nie ruszamy dysku drugi raz tylko po to pytanie.
+        motion3d_ready=motion3d.supports(series.names),
     )
-    return fig
 
 
-# ============================================================
-#  WIDOKI
-# ============================================================
-
-def _render_dashboard(request, dataset=None, graph_data=None, columns_count=None,
-                      total_points=None, error=None, motion3d_ready=False):
+def _dashboard_page(request, dataset=None, graph_data=None, columns_count=None,
+                    total_points=None, error=None, motion3d_ready=False):
     return render(request, "dashboard.html", {
-        "dataset": _dataset_meta(dataset) if dataset else None,
+        "dataset": dataset_meta(dataset) if dataset else None,
         "graph_data": graph_data,
         "columns_count": columns_count,
         "total_points": total_points,
@@ -416,241 +150,283 @@ def _render_dashboard(request, dataset=None, graph_data=None, columns_count=None
     })
 
 
-@require_POST
-def logout_view(request):
-    logout(request)
-    return redirect('login')
-
-
 @login_required
 @ensure_csrf_cookie
-def dashboard(request, filename=None):
-    dataset = _resolve_dataset(request.user, filename)
-
-    if dataset is None:
-        return _render_dashboard(
-            request,
-            error=(f"Nie znaleziono pliku: {filename}" if filename else None),
-        )
-
-    data_path = _dataset_path(request.user, dataset)
-
-    if not data_path.exists():
-        logger.warning("Brak pliku na dysku: %s (dataset id=%s)", data_path, dataset.pk)
-        return _render_dashboard(request, dataset=dataset,
-                                 error="Plik nie istnieje na serwerze. Prześlij go ponownie.")
-
-    try:
-        series = _load_series(data_path)
-    except pd.errors.EmptyDataError:
-        return _render_dashboard(request, dataset=dataset, error="Plik CSV nie zawiera danych.")
-    except Exception:
-        logger.exception("Nie udało się wczytać CSV: %s", data_path)
-        return _render_dashboard(request, dataset=dataset,
-                                 error="Nie udało się odczytać pliku CSV.")
-
-    if not series["names"]:
-        return _render_dashboard(request, dataset=dataset, columns_count=0,
-                                 error="Plik nie zawiera kolumn liczbowych do narysowania.")
-
-    fig = _build_figure(series)
-
-    return _render_dashboard(
-        request,
-        dataset=dataset,
-        graph_data=fig.to_plotly_json(),
-        columns_count=len(series["names"]),
-        total_points=series["n"],
-        # Same nazwy kolumn wystarczą, żeby wiedzieć, czy zakładka 3D ma
-        # sens — nie ruszamy dysku drugi raz tylko po to pytanie.
-        motion3d_ready=motion3d.supports(series["names"]),
-    )
+def datasets_view(request):
+    return render(request, "datasets.html")
 
 
-@login_required
-def api_dataset_range(request, filename):
-    """Doczytuje wycinek danych w PEŁNEJ rozdzielczości dla widocznego
-    zakresu osi X. Wołane przez dashboard.js po każdym zoomie.
+# ============================================================
+#  WSPÓLNA CZĘŚĆ ENDPOINTÓW API
+# ============================================================
 
-    Dzięki temu decymacja nigdy nie jest stratna dla oka: im głębiej
-    przybliżasz, tym mniej wierszy wpada do kubełka, aż w końcu kubełek
-    ma jedną próbkę i dostajesz surowe dane. Rozdzielczość jest zawsze
-    maksymalna z możliwych do wyświetlenia."""
-    dataset = _resolve_dataset(request.user, filename)
-    if dataset is None:
-        return JsonResponse({"error": "Nie znaleziono pliku."}, status=404)
+class ApiView(LoginRequiredMixin, View):
+    """Widok zwracający JSON, dostępny tylko po zalogowaniu."""
 
-    path = _dataset_path(request.user, dataset)
-    if not path.exists():
-        return JsonResponse({"error": "Plik nie istnieje na serwerze."}, status=404)
+    @staticmethod
+    def error(message: str, status: int) -> JsonResponse:
+        return JsonResponse({"error": message}, status=status)
 
-    try:
-        series = _load_series(path)
-    except Exception:
-        logger.exception("Nie udało się wczytać CSV: %s", path)
-        return JsonResponse({"error": "Nie udało się odczytać pliku."}, status=500)
+    @staticmethod
+    def json_body(request):
+        """Ciało żądania jako dict. None = nie da się sparsować."""
+        try:
+            payload = json.loads(request.body or b"{}")
+        except (ValueError, UnicodeDecodeError):
+            return None
+        return payload if isinstance(payload, dict) else None
 
-    # x to numer wiersza, więc zakres tnie się bezpośrednio po indeksie —
-    # nie trzeba niczego wyszukiwać binarnie.
-    try:
-        x0 = float(request.GET.get("x0", 0))
-        x1 = float(request.GET.get("x1", series["n"]))
-        buckets = int(request.GET.get("buckets", TARGET_BUCKETS))
-    except (TypeError, ValueError):
-        return HttpResponseBadRequest("Nieprawidłowe parametry zakresu.")
 
-    buckets = max(200, min(buckets, 6000))
+class DatasetApiView(ApiView):
+    """Endpoint działający na JEDNYM zestawie danych z URL-a.
 
-    # Margines: użytkownik przesuwa wykres, więc doczytujemy trochę poza
-    # widoczny zakres — inaczej każde drgnięcie myszą to nowe żądanie.
-    span = max(x1 - x0, 1)
-    lo = int(math.floor(x0 - span * 0.15))
-    hi = int(math.ceil(x1 + span * 0.15)) + 1
+    Rozwiązanie nazwy pliku i sprawdzenie właściciela idzie raz, w dispatch:
+    zestaw cudzy albo bez wersji przygotowanej kończy się tu 404 i żadna
+    metoda go nie zobaczy.
+    """
 
-    cols = request.GET.get("cols")
-    name_filter = set(cols.split(",")) if cols else None
+    def dispatch(self, request, *args, **kwargs):
+        # Kolejność jest istotna: zapytanie bazy o AnonymousUser wywraca
+        # się na typie, więc brak logowania rozstrzygamy przed odczytem.
+        if not request.user.is_authenticated:
+            return self.handle_no_permission()
 
-    return JsonResponse({
-        "lo": max(lo, 0),
-        "hi": min(hi, series["n"]),
-        "total": series["n"],
-        "series": _series_payload(series, name_filter, lo, hi, buckets),
-    })
+        self.storage = storage_for(request.user)
+        self.dataset = self.storage.resolve(kwargs.get("filename"))
+        if self.dataset is None:
+            return self.error("Nie znaleziono pliku.", 404)
+
+        return super().dispatch(request, *args, **kwargs)
+
+    def dataset_path(self):
+        """Ścieżka do pliku albo None, gdy zniknął z dysku między żądaniami."""
+        path = self.storage.path_for(self.dataset)
+        return path if path.exists() else None
+
+    def segments_response(self, status: int = 200) -> JsonResponse:
+        """PEŁNA lista segmentów — także po zapisie i po usunięciu.
+
+        Numer segmentu nie jest zapisany w bazie, tylko wyliczony
+        z kolejności na osi czasu, więc dodanie uderzenia w środku nagrania
+        przenumerowuje wszystkie późniejsze. Zwracanie całej listy jest tu
+        tańsze niż powtarzanie tej samej logiki w przeglądarce, a lista ma
+        rozmiar kilkudziesięciu rekordów, nie kilkudziesięciu tysięcy.
+        """
+        return JsonResponse({
+            "segments": segments_payload(self.dataset),
+            "phase_types": phase_types_payload(),
+        }, status=status)
+
+    def parsed_range(self, request):
+        """(RowRange, None) albo (None, odpowiedź z błędem)."""
+        payload = self.json_body(request)
+        if payload is None:
+            return None, self.error("Nieprawidłowe dane żądania.", 400)
+
+        bounds, message = RowRange.parse(payload)
+        if message:
+            return None, self.error(message, 400)
+        return bounds, None
+
+
+class SegmentApiView(DatasetApiView):
+    """Endpoint działający na JEDNYM segmencie tego zestawu.
+
+    Segment jest szukany zawsze w obrębie datasetu użytkownika, więc samo
+    podanie obcego id nic nie daje.
+    """
+
+    def load_segment(self, segment_id):
+        return Segment.objects.filter(dataset=self.dataset, pk=segment_id).first()
+
+
+# ============================================================
+#  ZESTAWY DANYCH
+# ============================================================
+
+class DatasetListView(ApiView):
+    """Lista zestawów do sidebaru i do strony „Zestawy danych”.
+
+    Wchodzą TYLKO te, które mają wersję przygotowaną — bo tylko takie da
+    się otworzyć. Zestaw bez niej byłby pozycją na liście prowadzącą do
+    komunikatu o błędzie, a nie do danych.
+    """
+
+    def get(self, request):
+        storage = storage_for(request.user)
+        data = [dataset_meta(dataset, path=path) for dataset, path in storage.readable()]
+        return JsonResponse(data, safe=False)
+
+
+class DatasetUploadView(ApiView):
+    """Przyjęcie pliku CSV: zapis surowego i policzenie wersji przygotowanej.
+
+    Wersja przygotowana jest WARUNKIEM przyjęcia pliku — cała aplikacja
+    czyta wyłącznie ją, więc zestaw bez niej nie miałby czego pokazać.
+    """
+
+    def post(self, request):
+        uploaded = request.FILES.get("file")
+
+        rejection = self._rejection_reason(uploaded)
+        if rejection:
+            return self.error(rejection, 400)
+
+        storage = storage_for(request.user)
+        filename = storage.free_filename(uploaded.name)
+
+        try:
+            raw_path = storage.save_raw(uploaded, filename)
+        except OSError:
+            logger.exception("Zapis pliku nieudany: %s", filename)
+            return self.error("Nie udało się zapisać pliku na serwerze.", 500)
+
+        prepared_path, problem = storage.prepare(raw_path, filename)
+        if prepared_path is None:
+            # Surowy plik idzie do kosza razem z uploadem. Nie ma wpisu
+            # w bazie, który by go pilnował, a zostawiony zająłby nazwę
+            # i kolejna próba z poprawionym plikiem wylądowałaby jako „(2)”.
+            raw_path.unlink(missing_ok=True)
+            return self.error(
+                f"{problem} Plik nie został dodany — dane muszą dać się "
+                f"przygotować, żeby dało się na nich pracować.", 422)
+
+        dataset = Dataset.objects.create(owner=request.user, filename=filename)
+        meta = dataset_meta(dataset, path=prepared_path)
+        meta["prepared"] = True
+        return JsonResponse(meta)
+
+    @staticmethod
+    def _rejection_reason(uploaded):
+        """Powód odmowy jeszcze przed dotknięciem dysku albo None."""
+        if uploaded is None:
+            return "Nie przesłano żadnego pliku."
+        if not uploaded.name.lower().endswith(".csv"):
+            return "Dozwolone są tylko pliki .csv."
+        if uploaded.size > MAX_UPLOAD_SIZE:
+            return "Plik jest za duży (limit 300 MB)."
+
+        # Pierwsze pięć wierszy wystarczy, żeby stwierdzić, czy to w ogóle
+        # jest CSV — i kosztuje tyle samo przy pliku 1 MB co przy 300 MB.
+        try:
+            preview = pd.read_csv(uploaded, nrows=5)
+        except Exception:
+            return "Nie udało się odczytać pliku jako CSV."
+        finally:
+            uploaded.seek(0)
+
+        return "Plik CSV nie zawiera danych." if preview.empty else None
+
+
+class DatasetRangeView(DatasetApiView):
+    """Wycinek danych w PEŁNEJ rozdzielczości dla widocznego zakresu osi X.
+
+    Wołane przez dashboard.js po każdym zoomie. Dzięki temu decymacja nigdy
+    nie jest stratna dla oka: im głębiej przybliżasz, tym mniej wierszy
+    wpada do kubełka, aż w końcu kubełek ma jedną próbkę i dostajesz surowe
+    dane.
+    """
+
+    def get(self, request, filename):
+        path = self.dataset_path()
+        if path is None:
+            return self.error("Plik nie istnieje na serwerze.", 404)
+
+        try:
+            series = Series.from_csv(path)
+        except Exception:
+            logger.exception("Nie udało się wczytać CSV: %s", path)
+            return self.error("Nie udało się odczytać pliku.", 500)
+
+        try:
+            x0 = float(request.GET.get("x0", 0))
+            x1 = float(request.GET.get("x1", series.rows))
+            buckets = int(request.GET.get("buckets", TARGET_BUCKETS))
+        except (TypeError, ValueError):
+            return HttpResponseBadRequest("Nieprawidłowe parametry zakresu.")
+
+        buckets = max(MIN_BUCKETS, min(buckets, MAX_BUCKETS))
+        lo, hi = self._padded_range(x0, x1)
+
+        names = request.GET.get("cols")
+        return JsonResponse({
+            "lo": max(lo, 0),
+            "hi": min(hi, series.rows),
+            "total": series.rows,
+            "series": series.payload(
+                set(names.split(",")) if names else None, lo, hi, buckets),
+        })
+
+    @staticmethod
+    def _padded_range(x0: float, x1: float):
+        """Widoczny zakres z zapasem na przesuwanie wykresu.
+
+        x to numer wiersza, więc zakres tnie się bezpośrednio po indeksie —
+        nie trzeba niczego wyszukiwać binarnie.
+        """
+        span = max(x1 - x0, 1)
+        return (int(math.floor(x0 - span * RANGE_MARGIN)),
+                int(math.ceil(x1 + span * RANGE_MARGIN)) + 1)
 
 
 # ============================================================
 #  ANIMACJA 3D
 # ============================================================
 
-@lru_cache(maxsize=8)
-def _motion3d_cached(path_str, mtime, size, params):
-    """Rekonstrukcja 3D dla jednego zakresu wierszy.
+class Motion3DView(DatasetApiView):
+    """Scena Plotly + klatki animacji dla JEDNEGO segmentu (?segment=<id>).
 
-    Kluczem jest (plik, mtime, rozmiar, parametry), więc podmiana pliku
-    unieważnia wpis sama z siebie — tak samo jak w _load_series_cached.
+    Zakres bierze się wyłącznie z segmentu w bazie, nigdy z widocznego
+    fragmentu wykresu — model dźwigni opisuje jedno uderzenie, więc segment
+    jest częścią kontraktu, a nie wygodą.
 
-    To jest odpowiedź na pytanie "czy generować animację raz na segment":
-    liczymy ją LENIWIE, przy pierwszym wejściu na zakładkę 3D, ale wynik
-    zostaje tu i w pamięci przeglądarki. Każde kolejne przełączenie na ten
-    sam segment nic już nie liczy. Liczenie z góry, przy tworzeniu każdego
-    segmentu, kosztowałoby CPU także dla segmentów, których nikt nigdy nie
-    obejrzy — a przeglądarka i tak pobiera je w tle zaraz po utworzeniu
-    (motion3d.js), więc efekt dla użytkownika jest ten sam.
-
-    maxsize=8: jeden wpis to kilkadziesiąt–kilkaset kB JSON-a. To rząd
-    wielkości mniej niż ramki w _load_series_cached, ale też nie ma sensu
-    trzymać całej historii sesji.
+    Czyta CSV przez motion3d.prepare(), a NIE przez Series: tam wartości są
+    znormalizowane do 0–1 i jednostki fizyczne już nie istnieją, więc nie
+    dałoby się z nich odtworzyć ruchu. Źródłem jest ten sam plik
+    przygotowany, co dla wykresu 2D.
     """
-    prep = motion3d.prepare(Path(path_str))
-    return motion3d.build_motion(prep, **dict(params))
 
+    def get(self, request, filename):
+        segment, error = self._requested_segment(request)
+        if error:
+            return error
 
-def _phase_tuples(segment):
-    """Fazy segmentu w formacie, którego oczekuje motion3d._phase_spans:
-    (klucz, etykieta, kolor, start, koniec).
+        path = self.dataset_path()
+        if path is None:
+            return self.error("Plik nie istnieje na serwerze.", 404)
 
-    Krotka, a nie lista, bo trafia do klucza cache w _motion3d_cached —
-    poprawienie zakresu fazy ma unieważnić policzoną wcześniej animację.
-    """
-    rank = {key: i for i, key in enumerate(SubSegment.PHASE_ORDER)}
-    subs = sorted(
-        segment.subsegments.all(),
-        key=lambda sub: rank.get(sub.phase, len(rank)),
-    )
-    return tuple(
-        (
-            sub.phase,
-            sub.get_phase_display(),
-            SubSegment.PHASE_COLORS.get(sub.phase),
-            sub.start,
-            sub.end,
-        )
-        for sub in subs
-    )
+        try:
+            options = MotionOptions.from_query(request.GET)
+        except (TypeError, ValueError):
+            return HttpResponseBadRequest("Nieprawidłowe parametry animacji 3D.")
 
+        try:
+            return JsonResponse(scene_for_segment(path, segment, options))
+        except motion3d.Motion3DError as exc:
+            # Dane albo zakres nie pozwalają nic policzyć — to jest
+            # odpowiedź dla użytkownika, nie awaria serwera.
+            return self.error(str(exc), 422)
+        except Exception:
+            logger.exception("Rekonstrukcja 3D nie powiodła się: %s", path)
+            return self.error("Nie udało się zbudować animacji 3D.", 500)
 
-@login_required
-def api_dataset_motion3d(request, filename):
-    """Scena Plotly + klatki animacji dla JEDNEGO segmentu.
+    def _requested_segment(self, request):
+        raw_id = request.GET.get("segment")
+        if not raw_id:
+            return None, self.error(
+                "Zaznacz uderzenie na wykresie 2D — animacja liczy się dla "
+                "pojedynczego segmentu.", 400)
 
-    Zakres bierze się WYŁĄCZNIE z segmentu w bazie (?segment=<id>), nigdy
-    z widocznego fragmentu wykresu. Tor nadgarstka powstaje z modelu
-    sztywnej dźwigni dopasowanego do TEGO ruchu (motion3d._lever_fit),
-    a taki model opisuje jedno uderzenie, nie kwadrans nagrania, w którym
-    łokieć zdążył zmienić położenie kilkaset razy. Segment jest więc
-    częścią kontraktu, a nie wygodą: bez niego nie ma czego dopasować.
+        try:
+            segment_id = int(raw_id)
+        except (TypeError, ValueError):
+            return None, self.error("Nieprawidłowy numer segmentu.", 400)
 
-    Czyta CSV przez motion3d.prepare(), a NIE przez _load_series — tam
-    wartości są znormalizowane do 0–1 i jednostki fizyczne już nie
-    istnieją, więc nie dałoby się z nich całkować przyspieszenia.
+        segment = Segment.objects.filter(dataset=self.dataset, pk=segment_id).first()
+        if segment is None:
+            return None, self.error("Nie znaleziono segmentu.", 404)
 
-    Źródłem jest ten sam plik przygotowany, co dla wykresu 2D: jednostki
-    zostają fizyczne, a oś czasu (`time` w sekundach) motion3d rozpoznaje
-    sam — _axis_from_column wykrywa jednostkę zamiast ją zakładać.
-    """
-    raw_id = request.GET.get("segment")
-    if not raw_id:
-        return JsonResponse(
-            {"error": "Zaznacz uderzenie na wykresie 2D — animacja liczy się "
-                      "dla pojedynczego segmentu."},
-            status=400,
-        )
-
-    try:
-        segment_id = int(raw_id)
-    except (TypeError, ValueError):
-        return JsonResponse({"error": "Nieprawidłowy numer segmentu."}, status=400)
-
-    dataset, segment, error = _segment_or_error(request.user, filename, segment_id)
-    if error:
-        return error
-
-    path = _dataset_path(request.user, dataset)
-    if not path.exists():
-        return JsonResponse({"error": "Plik nie istnieje na serwerze."}, status=404)
-
-    def num(name, default, cast=float):
-        raw = request.GET.get(name)
-        if raw is None or raw == "":
-            return default
-        return cast(raw)
-
-    def flag(name, default):
-        raw = request.GET.get(name)
-        if raw is None or raw == "":
-            return default
-        return raw not in ("0", "false", "no")
-
-    def clamp(value, lo, hi):
-        return max(lo, min(value, hi))
-
-    # Nazwy kluczy muszą się zgadzać z sygnaturą motion3d.build_motion —
-    # lecą do niej jako **params.
-    try:
-        params = (
-            ("lo", segment.start),
-            ("hi", segment.end),
-            ("phases", _phase_tuples(segment)),
-            ("fps", clamp(num("fps", MIN_FPS), MIN_FPS, MAX_FPS)
-             if request.GET.get("fps") else motion3d.NO_FPS_LIMIT),
-            ("smooth", flag("smooth", True)),
-            ("watch_scale", clamp(num("watch", 1.0), 0.2, 20.0)),
-        )
-    except (TypeError, ValueError):
-        return HttpResponseBadRequest("Nieprawidłowe parametry animacji 3D.")
-
-    st = path.stat()
-    try:
-        result = _motion3d_cached(str(path), st.st_mtime_ns, st.st_size, params)
-    except motion3d.Motion3DError as exc:
-        # Dane albo zakres nie pozwalają nic policzyć — to jest odpowiedź
-        # dla użytkownika, nie awaria serwera.
-        return JsonResponse({"error": str(exc)}, status=422)
-    except Exception:
-        logger.exception("Rekonstrukcja 3D nie powiodła się: %s", path)
-        return JsonResponse({"error": "Nie udało się zbudować animacji 3D."}, status=500)
-
-    return JsonResponse(result)
+        return segment, None
 
 
 # ============================================================
@@ -658,337 +434,95 @@ def api_dataset_motion3d(request, filename):
 #
 #  Struktura: Dataset → Segment (uderzenie) → SubSegment (faza).
 #  Granice wszędzie to numery wierszy CSV, tak samo jak oś X wykresu.
-#
-#  Wszystkie cztery endpointy zwracają PEŁNĄ listę segmentów, także po
-#  zapisie i po usunięciu. Bierze się to z tego, że numer segmentu nie
-#  jest zapisany w bazie, a wyliczony z kolejności na osi czasu (patrz
-#  docstring modelu Segment): dodanie uderzenia w środku nagrania
-#  przenumerowuje wszystkie późniejsze. Zwracanie całej listy jest tu
-#  tańsze niż powtarzanie tej samej logiki w przeglądarce, a lista ma
-#  rozmiar kilkudziesięciu rekordów, nie kilkudziesięciu tysięcy.
 # ============================================================
 
-def _json_body(request):
-    """Ciało żądania jako dict. None = nie da się sparsować."""
-    try:
-        payload = json.loads(request.body or b"{}")
-    except (ValueError, UnicodeDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
-def _parse_range(payload):
-    """Waliduje {"start": .., "end": ..} → ((start, end), None) albo (None, błąd).
-
-    Z przeglądarki przychodzą liczby zmiennoprzecinkowe (granice
-    zaznaczenia na wykresie rzadko wypadają dokładnie na wierszu), więc
-    zaokrąglamy „na zewnątrz”: start w dół, end w górę. Zaznaczenie
-    zrobione od prawej do lewej ma start > end i po prostu je zamieniamy —
-    dla użytkownika kierunek przeciągania nie powinien mieć znaczenia.
-    """
-    try:
-        start = float(payload["start"])
-        end = float(payload["end"])
-    except (KeyError, TypeError, ValueError):
-        return None, "Wymagane są liczbowe pola 'start' i 'end'."
-
-    if not (math.isfinite(start) and math.isfinite(end)):
-        return None, "Granice zakresu muszą być skończonymi liczbami."
-
-    start, end = math.floor(min(start, end)), math.ceil(max(start, end))
-    start = max(int(start), 0)
-    end = int(end)
-
-    if end <= start:
-        return None, "Zakres musi obejmować co najmniej jeden wiersz."
-    if end > MAX_ROW_INDEX:
-        return None, "Zakres wykracza poza dopuszczalny numer wiersza."
-
-    return (start, end), None
-
-
-def _segments_payload(dataset):
-    """Segmenty datasetu z fazami, gotowe do wysłania jako JSON."""
-    segments = Segment.objects.filter(dataset=dataset).prefetch_related("subsegments")
-
-    # Fazy sortujemy po ich naturalnej kolejności w uderzeniu, a nie po
-    # zaznaczonym zakresie: panel ma pokazywać przygotowanie → przymierzanie
-    # → uderzenie → po uderzeniu również wtedy, gdy zostały zaznaczone
-    # w innej kolejności albo gdy jedna z nich jest jeszcze pusta.
-    phase_rank = {key: i for i, key in enumerate(SubSegment.PHASE_ORDER)}
-
-    out = []
-    for number, segment in enumerate(segments, start=1):
-        phases = sorted(
-            segment.subsegments.all(),
-            key=lambda sub: phase_rank.get(sub.phase, len(phase_rank)),
-        )
-        out.append({
-            "id": segment.pk,
-            "number": number,
-            "name": str(number),
-            "start": segment.start,
-            "end": segment.end,
-            "length": segment.length,
-            "phases": [
-                {
-                    "id": sub.pk,
-                    "phase": sub.phase,
-                    "label": sub.get_phase_display(),
-                    "start": sub.start,
-                    "end": sub.end,
-                    "length": sub.length,
-                }
-                for sub in phases
-            ],
-        })
-    return out
-
-
-def _segments_response(dataset, status=200):
-    return JsonResponse({
-        "segments": _segments_payload(dataset),
-        # Lista faz idzie razem z danymi, żeby przeglądarka nie musiała
-        # trzymać własnej kopii nazw ani kolorów — modele są tu jedynym
-        # źródłem prawdy, wspólnym z animacją 3D.
-        "phase_types": [
-            {"key": key, "label": label, "color": SubSegment.PHASE_COLORS.get(key)}
-            for key, label in SubSegment.PHASE_CHOICES
-        ],
-    }, status=status)
-
-
-def _segment_or_error(user, filename, segment_id=None):
-    """(dataset, segment, odpowiedź_błędu). Segment jest szukany zawsze
-    w obrębie datasetu użytkownika, więc samo podanie obcego id nic nie da."""
-    dataset = _resolve_dataset(user, filename)
-    if dataset is None:
-        return None, None, JsonResponse({"error": "Nie znaleziono pliku."}, status=404)
-
-    if segment_id is None:
-        return dataset, None, None
-
-    segment = Segment.objects.filter(dataset=dataset, pk=segment_id).first()
-    if segment is None:
-        return dataset, None, JsonResponse({"error": "Nie znaleziono segmentu."}, status=404)
-
-    return dataset, segment, None
-
-
-@login_required
-def api_segments(request, filename):
+class SegmentListView(DatasetApiView):
     """GET — lista segmentów, POST — nowy segment z {"start", "end"}."""
-    dataset, _, error = _segment_or_error(request.user, filename)
-    if error:
-        return error
 
-    if request.method == "GET":
-        return _segments_response(dataset)
+    def get(self, request, filename):
+        return self.segments_response()
 
-    if request.method != "POST":
-        return HttpResponseNotAllowed(["GET", "POST"])
+    def post(self, request, filename):
+        bounds, error = self.parsed_range(request)
+        if error:
+            return error
 
-    payload = _json_body(request)
-    if payload is None:
-        return JsonResponse({"error": "Nieprawidłowe dane żądania."}, status=400)
-
-    bounds, message = _parse_range(payload)
-    if message:
-        return JsonResponse({"error": message}, status=400)
-
-    Segment.objects.create(dataset=dataset, start=bounds[0], end=bounds[1])
-    return _segments_response(dataset, status=201)
+        Segment.objects.create(dataset=self.dataset,
+                               start=bounds.start, end=bounds.end)
+        return self.segments_response(status=201)
 
 
-@login_required
-def api_segment_detail(request, filename, segment_id):
+class SegmentDetailView(SegmentApiView):
     """PATCH — poprawia zakres segmentu, DELETE — usuwa go wraz z fazami
     (kaskada z ForeignKey)."""
-    dataset, segment, error = _segment_or_error(request.user, filename, segment_id)
-    if error:
-        return error
 
-    if request.method == "DELETE":
+    def patch(self, request, filename, segment_id):
+        segment = self.load_segment(segment_id)
+        if segment is None:
+            return self.error("Nie znaleziono segmentu.", 404)
+
+        bounds, error = self.parsed_range(request)
+        if error:
+            return error
+
+        segment.start, segment.end = bounds.start, bounds.end
+        segment.save(update_fields=["start", "end"])
+        trim_phases_to_segment(segment)
+
+        return self.segments_response()
+
+    def delete(self, request, filename, segment_id):
+        segment = self.load_segment(segment_id)
+        if segment is None:
+            return self.error("Nie znaleziono segmentu.", 404)
+
         segment.delete()
-        return _segments_response(dataset)
-
-    if request.method != "PATCH":
-        return HttpResponseNotAllowed(["PATCH", "DELETE"])
-
-    payload = _json_body(request)
-    if payload is None:
-        return JsonResponse({"error": "Nieprawidłowe dane żądania."}, status=400)
-
-    bounds, message = _parse_range(payload)
-    if message:
-        return JsonResponse({"error": message}, status=400)
-
-    segment.start, segment.end = bounds
-    segment.save(update_fields=["start", "end"])
-
-    # Zawężenie segmentu mogło wypchnąć fazy poza jego granice — przycinamy
-    # je do nowego zakresu, a te, które wypadły z niego całkowicie, znikają.
-    # Bez tego na wykresie zostałyby prostokąty faz wystające poza uderzenie,
-    # do którego należą.
-    for sub in segment.subsegments.all():
-        start = max(sub.start, segment.start)
-        end = min(sub.end, segment.end)
-        if end <= start:
-            sub.delete()
-        elif (start, end) != (sub.start, sub.end):
-            sub.start, sub.end = start, end
-            sub.save(update_fields=["start", "end"])
-
-    return _segments_response(dataset)
+        return self.segments_response()
 
 
-@login_required
-def api_segment_phase(request, filename, segment_id, phase):
+class SegmentPhaseView(SegmentApiView):
     """PUT — ustawia albo poprawia zakres jednej fazy, DELETE — czyści ją.
 
-    PUT, nie POST, bo faza jest identyfikowana swoją nazwą: to samo
-    żądanie wysłane dwa razy daje ten sam stan, a powtórne zaznaczenie
-    fazy poprawia istniejący wpis zamiast tworzyć drugi.
+    PUT, nie POST, bo faza jest identyfikowana swoją nazwą: to samo żądanie
+    wysłane dwa razy daje ten sam stan, a powtórne zaznaczenie fazy
+    poprawia istniejący wpis zamiast tworzyć drugi.
     """
-    dataset, segment, error = _segment_or_error(request.user, filename, segment_id)
-    if error:
-        return error
 
-    if phase not in dict(SubSegment.PHASE_CHOICES):
-        return JsonResponse({"error": "Nieznana faza."}, status=400)
+    def put(self, request, filename, segment_id, phase):
+        segment, error = self._segment_and_phase(segment_id, phase)
+        if error:
+            return error
 
-    if request.method == "DELETE":
+        bounds, error = self.parsed_range(request)
+        if error:
+            return error
+
+        # Faza jest częścią uderzenia, więc nie może z niego wystawać.
+        # Zaznaczenie „z zapasem” przycinamy do granic segmentu — odrzucamy
+        # dopiero takie, które w ogóle nie zahacza o segment.
+        inside = bounds.clipped_to(segment_range(segment))
+        if inside is None:
+            return self.error("Zaznaczony zakres leży poza segmentem.", 400)
+
+        SubSegment.objects.update_or_create(
+            segment=segment,
+            phase=phase,
+            defaults={"start": inside.start, "end": inside.end},
+        )
+        return self.segments_response()
+
+    def delete(self, request, filename, segment_id, phase):
+        segment, error = self._segment_and_phase(segment_id, phase)
+        if error:
+            return error
+
         SubSegment.objects.filter(segment=segment, phase=phase).delete()
-        return _segments_response(dataset)
+        return self.segments_response()
 
-    if request.method != "PUT":
-        return HttpResponseNotAllowed(["PUT", "DELETE"])
-
-    payload = _json_body(request)
-    if payload is None:
-        return JsonResponse({"error": "Nieprawidłowe dane żądania."}, status=400)
-
-    bounds, message = _parse_range(payload)
-    if message:
-        return JsonResponse({"error": message}, status=400)
-
-    # Faza jest częścią uderzenia, więc nie może z niego wystawać.
-    # Zaznaczenie „z zapasem” przycinamy do granic segmentu — odrzucamy
-    # dopiero takie, które w ogóle nie zahacza o segment.
-    start = max(bounds[0], segment.start)
-    end = min(bounds[1], segment.end)
-    if end <= start:
-        return JsonResponse(
-            {"error": "Zaznaczony zakres leży poza segmentem."}, status=400
-        )
-
-    SubSegment.objects.update_or_create(
-        segment=segment,
-        phase=phase,
-        defaults={"start": start, "end": end},
-    )
-    return _segments_response(dataset)
-
-
-# ============================================================
-#  ZESTAWY DANYCH
-# ============================================================
-
-@login_required
-@ensure_csrf_cookie
-def datasets_view(request):
-    return render(request, "datasets.html")
-
-
-@login_required
-def api_datasets(request):
-    """Lista zestawów do sidebaru i do strony „Zestawy danych”.
-
-    Wchodzą TYLKO te, które mają wersję przygotowaną — bo tylko takie da
-    się otworzyć. Zestaw bez niej byłby pozycją na liście prowadzącą do
-    komunikatu o błędzie, a nie do danych.
-    """
-    data = []
-    for ds in Dataset.objects.filter(owner=request.user):
-        path = _dataset_path(request.user, ds)
-        if not path.exists():
-            continue
-        data.append(_dataset_meta(ds, path=path))
-    return JsonResponse(data, safe=False)
-
-
-@login_required
-@require_POST
-def upload_dataset(request):
-    uploaded = request.FILES.get("file")
-
-    if uploaded is None:
-        return JsonResponse({"error": "Nie przesłano żadnego pliku."}, status=400)
-    if not uploaded.name.lower().endswith(".csv"):
-        return JsonResponse({"error": "Dozwolone są tylko pliki .csv."}, status=400)
-    if uploaded.size > MAX_UPLOAD_SIZE:
-        return JsonResponse({"error": "Plik jest za duży (limit 300 MB)."}, status=400)
-
-    try:
-        preview = pd.read_csv(uploaded, nrows=5)
-        if preview.empty:
-            return JsonResponse({"error": "Plik CSV nie zawiera danych."}, status=400)
-        uploaded.seek(0)
-    except Exception:
-        return JsonResponse({"error": "Nie udało się odczytać pliku jako CSV."}, status=400)
-
-    safe_name = get_valid_filename(Path(uploaded.name).name)
-    if not safe_name.lower().endswith(".csv"):
-        safe_name += ".csv"
-
-    user_dir = _user_dir(request.user)
-    user_dir.mkdir(parents=True, exist_ok=True)
-
-    prepared_dir = _user_prepared_dir(request.user)
-
-    # Nazwa jest zajęta, jeśli leży w KTÓRYMKOLWIEK z dwóch drzew albo
-    # widnieje w bazie. Sprawdzenie samego raw_data nie wystarczało:
-    # nieudany upload sprząta po sobie surowy plik, a wpis w bazie ma
-    # unique_together (owner, filename) — bez tego kolejny plik o tej
-    # samej nazwie kończyłby się IntegrityError zamiast wersją „(2)”.
-    stem, suffix = Path(safe_name).stem, Path(safe_name).suffix
-    zajete = set(
-        Dataset.objects.filter(owner=request.user).values_list("filename", flat=True)
-    )
-    filename = safe_name
-    dest_path = user_dir / filename
-    counter = 1
-    while dest_path.exists() or (prepared_dir / filename).exists() or filename in zajete:
-        counter += 1
-        filename = f"{stem} ({counter}){suffix}"
-        dest_path = user_dir / filename
-
-    try:
-        with open(dest_path, "wb+") as dest:
-            for chunk in uploaded.chunks():
-                dest.write(chunk)
-    except OSError:
-        logger.exception("Zapis pliku nieudany: %s", dest_path)
-        return JsonResponse({"error": "Nie udało się zapisać pliku na serwerze."}, status=500)
-
-    # Wersja przygotowana powstaje od razu przy uploadzie — i jest
-    # WARUNKIEM przyjęcia pliku. Cała aplikacja czyta wyłącznie ją, więc
-    # zestaw bez niej nie miałby czego pokazać.
-    prepared_path, blad = _prepare_uploaded_file(request.user, dest_path, filename)
-
-    if prepared_path is None:
-        # Surowy plik idzie do kosza razem z uploadem. Nie ma wpisu
-        # w bazie, który by go pilnował, a zostawiony zająłby nazwę
-        # i kolejna próba z poprawionym plikiem wylądowałaby jako „(2)”.
-        dest_path.unlink(missing_ok=True)
-        return JsonResponse(
-            {"error": f"{blad} Plik nie został dodany — dane muszą dać się "
-                      f"przygotować, żeby dało się na nich pracować."},
-            status=422,
-        )
-
-    dataset = Dataset.objects.create(owner=request.user, filename=filename)
-
-    meta = _dataset_meta(dataset, path=prepared_path)
-    meta["prepared"] = True
-    return JsonResponse(meta)
+    def _segment_and_phase(self, segment_id, phase):
+        segment = self.load_segment(segment_id)
+        if segment is None:
+            return None, self.error("Nie znaleziono segmentu.", 404)
+        if phase not in dict(SubSegment.PHASE_CHOICES):
+            return None, self.error("Nieznana faza.", 400)
+        return segment, None
