@@ -53,10 +53,19 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # więc nie trzeba trzymać drugiej ścieżki w bazie.
 ACCUR8POOL_DATA_DIR = BASE_DIR / "new_data" / "raw_data"
 ACCUR8POOL_PREPARED_DATA_DIR = BASE_DIR / "new_data" / "prepared_data"
-AUTH_PASSWORD_VALIDATORS = []
-LOGIN_URL = '/login'
-LOGIN_REDIRECT_URL = '/dashboard'
-LOGOUT_REDIRECT_URL = '/login'
+
+# Zestaw demonstracyjny: JEDEN przygotowany plik CSV plus opis segmentów
+# (demo.json), kopiowany do drzewa KAŻDEGO nowego użytkownika przy
+# zakładaniu konta — patrz dashboard/demo.py. Pusty katalog znaczy „nie ma
+# demo”: rejestracja działa wtedy dokładnie tak jak wcześniej.
+ACCUR8POOL_DEMO_DIR = BASE_DIR / "dashboard" / "demo_data"
+
+# Adresy z ukośnikiem na końcu — tak wyglądają wzorce w account/urls.py
+# i dashboard/urls.py. Bez niego każde przekierowanie na logowanie szło
+# przez dodatkowy skok APPEND_SLASH.
+LOGIN_URL = '/login/'
+LOGIN_REDIRECT_URL = '/dashboard/'
+LOGOUT_REDIRECT_URL = '/login/'
 # Application definition
 STATIC_URL = "static/"
 CSRF_COOKIE_HTTPONLY = False

@@ -21,6 +21,7 @@ i nie sklejają ich same z nazw z URL-a.
 from __future__ import annotations
 
 import logging
+import shutil
 from pathlib import Path
 from urllib.parse import quote
 
@@ -105,6 +106,20 @@ class DatasetStorage:
     #  UPLOAD
     # ------------------------------------------------------------
 
+    @staticmethod
+    def canonical_filename(original_name: str) -> str:
+        """Nazwa oczyszczona do postaci, w jakiej trafia na dysk i do bazy.
+
+        Osobno od free_filename, bo wołający bywa ciekaw czegoś innego niż
+        wolnej nazwy: żeby sprawdzić, czy zestaw o tej nazwie już jest, trzeba
+        pytać dokładnie o tę postać po oczyszczeniu (demo.py). Wcześniejsze
+        porównywanie z nazwą surową dawało fałszywe „nie ma” za każdym razem,
+        gdy get_valid_filename cokolwiek w niej zmienił — a zmienia
+        w każdej ze spacją.
+        """
+        safe_name = get_valid_filename(Path(original_name).name)
+        return safe_name if safe_name.lower().endswith(".csv") else safe_name + ".csv"
+
     def free_filename(self, original_name: str) -> str:
         """Nazwa, która nie jest jeszcze zajęta w ŻADNYM z trzech miejsc.
 
@@ -113,10 +128,7 @@ class DatasetStorage:
         (owner, filename) — bez tego kolejny plik o tej samej nazwie
         kończyłby się IntegrityError zamiast wersją „(2)”.
         """
-        safe_name = get_valid_filename(Path(original_name).name)
-        if not safe_name.lower().endswith(".csv"):
-            safe_name += ".csv"
-
+        safe_name = self.canonical_filename(original_name)
         stem, suffix = Path(safe_name).stem, Path(safe_name).suffix
         taken = set(
             Dataset.objects.filter(owner=self.user).values_list("filename", flat=True)
@@ -142,6 +154,22 @@ class DatasetStorage:
         with open(destination, "wb+") as target:
             for chunk in uploaded.chunks():
                 target.write(chunk)
+        return destination
+
+    def install_prepared(self, source: Path, filename: str) -> Path:
+        """Wkłada do drzewa użytkownika plik JUŻ PRZYGOTOWANY.
+
+        Tędy wchodzi zestaw demonstracyjny (demo.py): jest przygotowany raz,
+        w repozytorium, więc zakładanie konta sprowadza się do kopii pliku —
+        bez uruchamiania transformacji i bez wciągania scipy.
+
+        Wersji surowej nie kopiujemy. Służy WYŁĄCZNIE do powtórzenia
+        przygotowania, a demo powtarzać się nie ma z czego: źródłem jest
+        gotowy plik z katalogu demo, nie upload użytkownika.
+        """
+        self.prepared_dir.mkdir(parents=True, exist_ok=True)
+        destination = self.prepared_dir / filename
+        shutil.copyfile(source, destination)
         return destination
 
     def prepare(self, raw_path: Path, filename: str):

@@ -10,7 +10,7 @@ from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
 
-from . import motion3d, views
+from . import demo, motion3d, views
 from .models import Dataset, Segment, SubSegment
 
 User = get_user_model()
@@ -125,6 +125,14 @@ class BaseDataTest(TestCase):
             patch = mock.patch.object(views, nazwa, katalog)
             patch.start()
             self.addCleanup(patch.stop)
+
+        # Konto testowe ma być PUSTE. Nowe konta dostają zestaw
+        # demonstracyjny (dashboard/demo.py), więc bez odcięcia katalogu demo
+        # każdy tutejszy test o listach zestawów zależałby od tego, czy ktoś
+        # wgrał demo do repozytorium.
+        patch = mock.patch.object(demo, "DEMO_DIR", self.tmp_root / "bez-demo")
+        patch.start()
+        self.addCleanup(patch.stop)
 
         self.user = User.objects.create_user("ala", password="tajne-haslo-123")
         self.client.force_login(self.user)
