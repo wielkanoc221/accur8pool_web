@@ -12,14 +12,21 @@
 </head>
 <body>
 {% csrf_token %}
+{% include "icons.html" %}
 
-<!-- LEFT SIDEBAR -->
+<!-- LEWY SIDEBAR — ta sama struktura co w dashboard.html -->
 <nav class="sidebar">
     <div class="sidebar-header">
-        <div class="logo">
-            <div class="logo-icon">📊</div>
-            <span>accur8pool.pl</span>
-        </div>
+        <a href="{% url 'dashboard' %}" class="logo" title="accur8pool.pl">
+            <span class="logo-icon"><svg class="icon"><use href="#i-wave"></use></svg></span>
+            <span class="logo-text">accur8pool.pl</span>
+        </a>
+        <button type="button" class="sidebar-toggle" id="sidebar-toggle"
+                aria-controls="nav-menu-track" aria-expanded="true"
+                aria-label="Zwiń menu" title="Zwiń menu (Ctrl + B)">
+            <svg class="icon icon-close"><use href="#i-panel-close"></use></svg>
+            <svg class="icon icon-open"><use href="#i-panel-open"></use></svg>
+        </button>
     </div>
 
     <div class="nav-viewport">
@@ -28,26 +35,28 @@
             <!-- PANEL 1: główne menu -->
             <div class="nav-menu" id="nav-panel-main">
                 <div class="nav-section">Analityka</div>
-                <a href="{% url 'dashboard' %}" class="nav-item">
-                    <span class="nav-icon">📈</span>
-                    Dashboard
+                <a href="{% url 'dashboard' %}" class="nav-item" title="Dashboard">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-chart"></use></svg></span>
+                    <span class="nav-label">Dashboard</span>
                 </a>
-                <button type="button" class="nav-item active" id="open-files-panel">
-                    <span class="nav-icon">📁</span>
-                    Zestawy danych
+                <button type="button" class="nav-item active" id="open-files-panel"
+                        title="Zestawy danych">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-folder"></use></svg></span>
+                    <span class="nav-label">Zestawy danych</span>
                 </button>
             </div>
 
             <!-- PANEL 2: dostępne pliki (wysuwany) -->
             <div class="nav-menu" id="nav-panel-files">
                 <button type="button" class="nav-panel-back" id="back-to-main">
-                    <span class="nav-icon">←</span>
-                    Wróć
+                    <span class="nav-icon"><svg class="icon"><use href="#i-arrow-left"></use></svg></span>
+                    <span class="nav-label">Wróć</span>
                 </button>
                 <div class="nav-section">Dostępne pliki</div>
-                <label for="sidebar-upload-input" class="nav-item nav-upload-btn">
-                    <span class="nav-icon">📤</span>
-                    Prześlij plik CSV
+                <label for="sidebar-upload-input" class="nav-item nav-upload-btn"
+                       title="Prześlij plik CSV">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-upload"></use></svg></span>
+                    <span class="nav-label">Prześlij plik CSV</span>
                 </label>
                 <input type="file" id="sidebar-upload-input" accept=".csv" hidden>
                 <div id="sidebar-files-list">
@@ -59,7 +68,7 @@
     </div>
 
     <div class="sidebar-footer">
-        <div class="user-card">
+        <div class="user-card" title="{{ request.user.username|default:'Użytkownik' }}">
             <div class="user-avatar">{{ request.user.username|first|upper }}</div>
             <div class="user-info">
                 <div class="user-name">{{ request.user.username|default:"Użytkownik" }}</div>
@@ -77,7 +86,10 @@
             <p>Pliki powiązane z Twoim kontem</p>
         </div>
         <div class="topbar-actions">
-            <button class="btn btn-ghost btn-sm" onclick="loadDatasets()">🔄 Odśwież</button>
+            <button type="button" class="btn btn-ghost btn-sm" onclick="loadDatasets()">
+                <svg class="icon" aria-hidden="true"><use href="#i-refresh"></use></svg>
+                <span class="btn-label">Odśwież</span>
+            </button>
         </div>
     </header>
 
@@ -91,7 +103,8 @@
             </div>
             <div class="card-body">
                 <label for="upload-input" class="btn btn-primary btn-sm">
-                    📤 Wybierz plik CSV
+                    <svg class="icon" aria-hidden="true"><use href="#i-upload"></use></svg>
+                    Wybierz plik CSV
                 </label>
                 <input type="file" id="upload-input" accept=".csv" hidden>
                 <div id="upload-status"></div>
@@ -108,7 +121,9 @@
             <div class="card-body">
                 <div id="datasets_list" class="datasets-grid">
                     <div class="empty-state">
-                        <div class="empty-state-icon">⏳</div>
+                        <div class="empty-state-icon is-busy">
+                            <svg class="icon icon-lg"><use href="#i-loader"></use></svg>
+                        </div>
                         <p>Ładowanie zestawów danych…</p>
                     </div>
                 </div>
@@ -117,7 +132,7 @@
     </div>
 </div>
 
-<script src="{% static 'js/upload.js' %}"></script>
+<script src="{% static 'js/common.js' %}"></script>
 <script src="{% static 'js/dataset.js' %}"></script>
 <script src="{% static 'js/sidebar-panels.js' %}"></script>
 <script src="{% static 'js/mobile-nav.js' %}"></script>

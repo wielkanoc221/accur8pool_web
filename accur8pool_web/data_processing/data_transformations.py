@@ -67,7 +67,6 @@ class DataFrameTransformerBase:
     def lowpass(self, columns: Sequence[str], cutoff: float) -> "DataFrameTransformerBase":
         for col in columns:
             self.data[col] = lowpass_filter(self.data[col], cutoff=cutoff)
-            self.data[col] = lowpass_filter(self.data[col], cutoff=cutoff)
         return self
 
     def add_magnitude(

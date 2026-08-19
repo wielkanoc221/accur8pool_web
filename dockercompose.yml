@@ -1,0 +1,87 @@
+# Uruchomienie aplikacji na serwerze.
+#
+#   cp .env.example .env      # i uzupełnij DJANGO_SECRET_KEY
+#   docker compose up -d --build
+#
+# Domyślnie wstaje JEDNA usługa (web) z bazą SQLite na wolumenie —
+# aplikacja trzyma w bazie tylko metadane, właściwe pomiary leżą
+# w plikach CSV obok. PostgreSQL jest w profilu `postgres`, opis niżej
+# i w DEPLOYMENT.md.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: accur8pool-web:latest
+    restart: unless-stopped
+
+    # Wszystkie ustawienia wchodzą z .env — obraz jest wszędzie ten sam.
+    env_file:
+      - .env
+
+    # Port wystawiony TYLKO na pętlę zwrotną: ruch z internetu ma wchodzić
+    # przez odwrotne proxy z certyfikatem (przykładowa konfiguracja nginxa
+    # jest w DEPLOYMENT.md). Żeby wystawić aplikację wprost, zamień na
+    # "8000:8000" — ale wtedy zostaje samo http.
+    ports:
+      - "127.0.0.1:8000:8000"
+
+    # Dane użytkowników (raw_data, prepared_data) i plik bazy SQLite.
+    # To JEDYNE miejsce, które trzeba backupować — reszta odtwarza się
+    # z obrazu.
+    volumes:
+      - accur8pool_data:/data
+
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "--output", "/dev/null",
+             "http://127.0.0.1:8000/healthz/"]
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+    logging:
+      # Bez limitu plik z logami rośnie, aż zabraknie miejsca na dysku.
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+    # Nie ma tu `depends_on: db` rozmyślnie. Baza siedzi w profilu, a
+    # zależność od usługi z nieaktywnego profilu wywraca całe polecenie
+    # — przy domyślnym SQLite nie dałoby się wystartować. Na czekanie
+    # jest lepszy sposób: entrypoint sam próbuje połączyć się z bazą,
+    # zanim ruszy z migracjami (i robi to także wtedy, gdy baza stoi na
+    # zupełnie innej maszynie, poza tym plikiem).
+
+  # --------------------------------------------------------------
+  #  PostgreSQL — opcjonalny
+  # --------------------------------------------------------------
+  # Wstaje tylko z profilem:
+  #     docker compose --profile postgres up -d --build
+  # i tylko wtedy, gdy w .env ustawiono DB_ENGINE=postgres.
+  db:
+    image: postgres:17-alpine
+    profiles: ["postgres"]
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${DB_NAME:-accur8pool}"
+      POSTGRES_USER: "${DB_USER:-accur8pool}"
+      # Wartość domyślna (pusty napis) jest tu celowo zamiast `:?`, które
+      # przerywa polecenie: Compose podstawia zmienne w CAŁYM pliku, także
+      # gdy profil `postgres` jest nieaktywny, więc `:?` wywracałoby
+      # zwykłe `docker compose up` na SQLite. Przy włączonym profilu puste
+      # hasło i tak zatrzyma się na obrazie postgresa, z jasnym błędem.
+      POSTGRES_PASSWORD: "${DB_PASSWORD:-}"
+    volumes:
+      - accur8pool_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-accur8pool} -d ${DB_NAME:-accur8pool}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  accur8pool_data:
+  accur8pool_pgdata:

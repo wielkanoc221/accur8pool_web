@@ -34,10 +34,18 @@ document.addEventListener('DOMContentLoaded', function () {
         const btn = card.querySelector('[data-fullscreen-btn]');
         if (btn) {
             btn.setAttribute('aria-pressed', String(on));
-            const icon = btn.querySelector('.fs-icon');
+            // Ikona to <svg><use href="#i-…">, więc podmieniamy cel odnośnika,
+            // a nie tekst przycisku. href i xlink:href razem — starsze Safari
+            // czyta wyłącznie ten drugi.
+            const use = btn.querySelector('.fs-icon use');
             const label = btn.querySelector('.fs-label');
-            if (icon) icon.textContent = on ? '✕' : '⛶';
+            if (use) {
+                const id = on ? '#i-collapse' : '#i-expand';
+                use.setAttribute('href', id);
+                use.setAttributeNS('http://www.w3.org/1999/xlink', 'xlink:href', id);
+            }
             if (label) label.textContent = on ? 'Zamknij' : 'Pełny ekran';
+            btn.title = on ? 'Zamknij pełny ekran' : 'Pełny ekran';
         }
 
         // Dwa przeliczenia: pierwsze po przemalowaniu, drugie po tym, jak

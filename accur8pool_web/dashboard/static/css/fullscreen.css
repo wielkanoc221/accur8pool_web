@@ -12,7 +12,8 @@
 /* Przyciski w nagłówku karty (Reset / Pełny ekran) */
 .card-actions {
     display: flex;
-    gap: 8px;
+    align-items: center;
+    gap: var(--sp-2);
     flex-shrink: 0;
 }
 
@@ -71,14 +72,17 @@ body.graph-fullscreen .sidebar-backdrop {
    ============================================ */
 @media (max-width: 768px) {
 
-    /* Na wąskim ekranie w nagłówku karty mieszczą się same ikony */
-    .btn-label {
+    /* Na wąskim ekranie w nagłówku karty mieszczą się same ikony.
+       Reguła jest ZAWĘŻONA do nagłówków kart — wcześniej dotyczyła
+       każdego .btn-label na stronie i zjadała też napis „Wyloguj”
+       w szufladzie menu, gdzie miejsca jest pod dostatkiem. */
+    .card-actions .btn-label,
+    .m3d-player .btn-label {
         display: none;
     }
 
     .card-actions .btn {
         padding: 8px 10px;
-        font-size: 15px;
         line-height: 1;
     }
 
@@ -128,12 +132,14 @@ body.graph-fullscreen .sidebar-backdrop {
 .card.is-fullscreen::after {
     content: 'Esc — wyjdź';
     position: absolute;
-    right: 12px;
-    bottom: 8px;
-    font-size: 11px;
+    right: 14px;
+    bottom: 10px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    background: rgba(15, 23, 42, 0.06);
+    font-size: var(--fs-xs);
     color: var(--text-muted);
     pointer-events: none;
-    opacity: 0.7;
 }
 
 @media (hover: none) {

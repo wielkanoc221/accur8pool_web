@@ -15,16 +15,27 @@
 </head>
 <body>
 {% csrf_token %}
+{% include "icons.html" %}
 
 <!-- ============================================================
      LEWY SIDEBAR — struktura identyczna jak w datasets.html
+
+     Zwijany do szyny z ikonami: przycisk w nagłówku (albo Ctrl+B)
+     przełącza klasę .sidebar-collapsed na <body>. Obsługa i pamięć
+     stanu: sidebar-panels.js, wygląd: sidebar.css.
      ============================================================ -->
 <nav class="sidebar">
     <div class="sidebar-header">
-        <a href="{% url 'dashboard' %}" class="logo">
-            <div class="logo-icon">📊</div>
-            <span>accur8pool.pl</span>
+        <a href="{% url 'dashboard' %}" class="logo" title="accur8pool.pl">
+            <span class="logo-icon"><svg class="icon"><use href="#i-wave"></use></svg></span>
+            <span class="logo-text">accur8pool.pl</span>
         </a>
+        <button type="button" class="sidebar-toggle" id="sidebar-toggle"
+                aria-controls="nav-menu-track" aria-expanded="true"
+                aria-label="Zwiń menu" title="Zwiń menu (Ctrl + B)">
+            <svg class="icon icon-close"><use href="#i-panel-close"></use></svg>
+            <svg class="icon icon-open"><use href="#i-panel-open"></use></svg>
+        </button>
     </div>
 
     <div class="nav-viewport">
@@ -33,26 +44,28 @@
             <!-- PANEL 1: główne menu -->
             <div class="nav-menu" id="nav-panel-main">
                 <div class="nav-section">Analityka</div>
-                <a href="{% url 'dashboard' %}" class="nav-item active">
-                    <span class="nav-icon">📈</span>
-                    Dashboard
+                <a href="{% url 'dashboard' %}" class="nav-item active" title="Dashboard">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-chart"></use></svg></span>
+                    <span class="nav-label">Dashboard</span>
                 </a>
-                <button type="button" class="nav-item" id="open-files-panel">
-                    <span class="nav-icon">📁</span>
-                    Zestawy danych
+                <button type="button" class="nav-item" id="open-files-panel"
+                        title="Zestawy danych">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-folder"></use></svg></span>
+                    <span class="nav-label">Zestawy danych</span>
                 </button>
             </div>
 
             <!-- PANEL 2: dostępne pliki (wysuwany) -->
             <div class="nav-menu" id="nav-panel-files">
                 <button type="button" class="nav-panel-back" id="back-to-main">
-                    <span class="nav-icon">←</span>
-                    Wróć
+                    <span class="nav-icon"><svg class="icon"><use href="#i-arrow-left"></use></svg></span>
+                    <span class="nav-label">Wróć</span>
                 </button>
                 <div class="nav-section">Dostępne pliki</div>
-                <label for="sidebar-upload-input" class="nav-item nav-upload-btn">
-                    <span class="nav-icon">📤</span>
-                    Prześlij plik CSV
+                <label for="sidebar-upload-input" class="nav-item nav-upload-btn"
+                       title="Prześlij plik CSV">
+                    <span class="nav-icon"><svg class="icon"><use href="#i-upload"></use></svg></span>
+                    <span class="nav-label">Prześlij plik CSV</span>
                 </label>
                 <input type="file" id="sidebar-upload-input" accept=".csv" hidden>
                 <div id="sidebar-files-list">
@@ -64,7 +77,7 @@
     </div>
 
     <div class="sidebar-footer">
-        <div class="user-card">
+        <div class="user-card" title="{{ request.user.username|default:'Użytkownik' }}">
             <div class="user-avatar">{{ request.user.username|first|upper }}</div>
             <div class="user-info">
                 <div class="user-name">{{ request.user.username|default:"Użytkownik" }}</div>
@@ -73,8 +86,9 @@
         </div>
         <form method="post" action="{% url 'logout' %}" class="logout-form">
             {% csrf_token %}
-            <button type="submit" class="btn btn-ghost btn-sm btn-logout">
-                <span aria-hidden="true">⏻</span> Wyloguj
+            <button type="submit" class="btn btn-sm btn-logout" title="Wyloguj">
+                <svg class="icon" aria-hidden="true"><use href="#i-power"></use></svg>
+                <span class="btn-label">Wyloguj</span>
             </button>
         </form>
     </div>
@@ -98,14 +112,14 @@
         <nav class="view-tabs" role="tablist" aria-label="Widok danych">
             <button type="button" class="view-tab is-active" data-view="2d"
                     role="tab" aria-selected="true" aria-controls="view-2d">
-                <span class="tab-icon" aria-hidden="true">📈</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-wave"></use></svg>
                 <span class="tab-label">Przebieg 2D</span>
             </button>
             <button type="button" class="view-tab" data-view="3d"
                     role="tab" aria-selected="false" aria-controls="view-3d"
                     {% if not motion3d_ready %}disabled
                     title="Plik nie zawiera kolumn IMU (gyr*/rot* + timestamp)"{% endif %}>
-                <span class="tab-icon" aria-hidden="true">🧊</span>
+                <svg class="icon" aria-hidden="true"><use href="#i-cube"></use></svg>
                 <span class="tab-label">Ruch 3D</span>
             </button>
         </nav>
@@ -118,7 +132,7 @@
 
             {% if error %}
                 <div class="alert alert-error">
-                    <span aria-hidden="true">⚠️</span>
+                    <svg class="icon" aria-hidden="true"><use href="#i-alert"></use></svg>
                     <span>{{ error }}</span>
                 </div>
             {% endif %}
@@ -135,16 +149,18 @@
                         </div>
                     </div>
                     <div class="card-actions">
-                        <button type="button" class="btn btn-ghost btn-sm" onclick="window.resetZoom()">
-                            <span aria-hidden="true">🔍</span>
+                        <button type="button" class="btn btn-ghost btn-sm"
+                                onclick="window.resetZoom()" title="Reset przybliżenia">
+                            <svg class="icon" aria-hidden="true"><use href="#i-reset"></use></svg>
                             <span class="btn-label">Reset</span>
                         </button>
                         <button type="button"
                                 class="btn btn-ghost btn-sm"
                                 id="graph-fullscreen"
                                 data-fullscreen-btn
-                                aria-pressed="false">
-                            <span class="fs-icon" aria-hidden="true">⛶</span>
+                                aria-pressed="false"
+                                title="Pełny ekran">
+                            <svg class="icon fs-icon" aria-hidden="true"><use href="#i-expand"></use></svg>
                             <span class="fs-label btn-label">Pełny ekran</span>
                         </button>
                     </div>
@@ -154,7 +170,9 @@
                         <div id="graph" class="plot-area"></div>
                     {% else %}
                         <div class="empty-state">
-                            <div class="empty-state-icon">📈</div>
+                            <div class="empty-state-icon">
+                                <svg class="icon icon-lg"><use href="#i-wave"></use></svg>
+                            </div>
                             <p>
                                 Nie wybrano zestawu danych.<br>
                                 <a href="{% url 'datasets' %}">Wybierz plik CSV</a>, aby zobaczyć wykres.
@@ -175,7 +193,7 @@
                 </div>
                 <div class="stat-card">
                     <div class="stat-label">Aktualizacja</div>
-                    <div class="stat-value">{{ dataset.updated_at|default:"—" }}</div>
+                    <div class="stat-value stat-value-date">{{ dataset.updated_at|default:"—" }}</div>
                 </div>
             </div>
 
@@ -200,21 +218,59 @@
                                     aria-label="Uderzenie do animacji" disabled>
                                 <option value="">Ładowanie segmentów…</option>
                             </select>
+                            <!-- Obrót sceny wokół pojedynczej osi. Myszą
+                                 wychodzi zawsze obrót wokół dwóch osi
+                                 naraz, więc dwóch uderzeń nie da się nią
+                                 ustawić w tym samym ujęciu. Te same kroki
+                                 dają strzałki na klawiaturze (↑↓ = oś X,
+                                 ←→ = oś Y, +Shift = oś Z). Działa też
+                                 w trakcie odtwarzania. -->
+                            <div class="m3d-rotate" role="group"
+                                 aria-label="Obrót sceny">
+                                <span class="m3d-rotate-axis" aria-hidden="true">X</span>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="x" data-rot-deg="-15"
+                                        title="Obrót wokół osi X, widok w górę (↑)"
+                                        aria-label="Obróć wokół osi X w górę">▲</button>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="x" data-rot-deg="15"
+                                        title="Obrót wokół osi X, widok w dół (↓)"
+                                        aria-label="Obróć wokół osi X w dół">▼</button>
+                                <span class="m3d-rotate-axis" aria-hidden="true">Y</span>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="y" data-rot-deg="-15"
+                                        title="Obrót wokół osi Y w lewo (←)"
+                                        aria-label="Obróć wokół osi Y w lewo">◀</button>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="y" data-rot-deg="15"
+                                        title="Obrót wokół osi Y w prawo (→)"
+                                        aria-label="Obróć wokół osi Y w prawo">▶</button>
+                                <span class="m3d-rotate-axis" aria-hidden="true">Z</span>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="z" data-rot-deg="-15"
+                                        title="Obrót osi X i Y wokół pionu, w lewo (Shift + ←)"
+                                        aria-label="Obróć wokół osi Z w lewo">↺</button>
+                                <button type="button" class="m3d-rot"
+                                        data-rot-axis="z" data-rot-deg="15"
+                                        title="Obrót osi X i Y wokół pionu, w prawo (Shift + →)"
+                                        aria-label="Obróć wokół osi Z w prawo">↻</button>
+                            </div>
                             <!-- Obrót i przybliżenie sceny zostają takie,
                                  jakie ustawił widz — także po zmianie
-                                 segmentu. To jest jedyna droga powrotu
-                                 do widoku domyślnego. -->
+                                 segmentu i w trakcie animacji. To jest
+                                 jedyna droga powrotu do widoku domyślnego. -->
                             <button type="button" class="btn btn-ghost btn-sm"
-                                    id="m3d-reset-view">
-                                <span aria-hidden="true">🔍</span>
+                                    id="m3d-reset-view" title="Reset widoku sceny">
+                                <svg class="icon" aria-hidden="true"><use href="#i-target"></use></svg>
                                 <span class="btn-label">Reset widoku</span>
                             </button>
                             <button type="button"
                                     class="btn btn-ghost btn-sm"
                                     id="m3d-fullscreen"
                                     data-fullscreen-btn
-                                    aria-pressed="false">
-                                <span class="fs-icon" aria-hidden="true">⛶</span>
+                                    aria-pressed="false"
+                                    title="Pełny ekran">
+                                <svg class="icon fs-icon" aria-hidden="true"><use href="#i-expand"></use></svg>
                                 <span class="fs-label btn-label">Pełny ekran</span>
                             </button>
                         </div>
@@ -224,7 +280,8 @@
                         <div class="m3d-player" id="m3d-player">
                             <button type="button" class="btn btn-primary btn-sm"
                                     id="m3d-play" disabled>
-                                <span aria-hidden="true">▶</span>
+                                <svg class="icon icon-solid" id="m3d-play-icon"
+                                     aria-hidden="true"><use href="#i-play"></use></svg>
                                 <span id="m3d-play-label">Odtwórz</span>
                             </button>
                             <!-- Uderzenie trwa ułamek sekundy, więc pętla
@@ -232,7 +289,7 @@
                             <button type="button" class="btn btn-ghost btn-sm m3d-loop is-active"
                                     id="m3d-loop" aria-pressed="true"
                                     title="Powtarzaj w kółko">
-                                <span aria-hidden="true">🔁</span>
+                                <svg class="icon" aria-hidden="true"><use href="#i-loop"></use></svg>
                                 <span class="btn-label">Pętla</span>
                             </button>
                             <label class="m3d-speed-label">
@@ -264,7 +321,9 @@
                         <div class="m3d-stage">
                             <div id="graph3d" class="plot-area" hidden></div>
                             <div class="empty-state m3d-state" id="m3d-state">
-                                <div class="empty-state-icon">🧊</div>
+                                <div class="empty-state-icon">
+                                    <svg class="icon icon-lg"><use href="#i-cube"></use></svg>
+                                </div>
                                 <p id="m3d-state-text">
                                     Zaznacz segment na wykresie 2D albo przybliż
                                     fragment i wróć tutaj.
@@ -303,7 +362,10 @@
                                 class="seg-back"
                                 id="seg-back"
                                 hidden
-                                aria-label="Wróć do listy segmentów">←</button>
+                                aria-label="Wróć do listy segmentów"
+                                title="Wróć do listy segmentów">
+                            <svg class="icon" aria-hidden="true"><use href="#i-arrow-left"></use></svg>
+                        </button>
                         <div>
                             <div class="card-title" id="seg-title">Segmenty</div>
                             <div class="card-subtitle" id="seg-subtitle">
@@ -314,11 +376,13 @@
                     <button type="button"
                             class="sheet-close"
                             id="segments-close"
-                            aria-label="Zamknij panel segmentów">×</button>
+                            aria-label="Zamknij panel segmentów">
+                        <svg class="icon icon-lg" aria-hidden="true"><use href="#i-x"></use></svg>
+                    </button>
                 </div>
                 <div class="card-body">
                     <div class="hint" id="seg-hint">
-                        <span aria-hidden="true">💡</span>
+                        <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
                         <span id="seg-hint-text">
                             Zaznacz uderzenie przeciągnięciem po wykresie.
                         </span>
@@ -326,11 +390,13 @@
 
                     <div class="segment-toolbar" id="seg-toolbar">
                         <button type="button" class="btn btn-primary btn-sm" id="seg-mark">
-                            <span aria-hidden="true">✂️</span>
+                            <svg class="icon" aria-hidden="true"><use href="#i-scissors"></use></svg>
                             <span id="seg-mark-label">Zaznacz uderzenie</span>
                         </button>
-                        <button type="button" class="btn btn-ghost btn-sm" id="seg-reset">
-                            <span aria-hidden="true">🔍</span> Reset
+                        <button type="button" class="btn btn-ghost btn-sm" id="seg-reset"
+                                title="Reset przybliżenia">
+                            <svg class="icon" aria-hidden="true"><use href="#i-reset"></use></svg>
+                            Reset
                         </button>
                     </div>
 
@@ -346,7 +412,10 @@
 
             <div class="card info-card">
                 <div class="card-body">
-                    <div class="info-title">Jak to działa</div>
+                    <div class="info-title">
+                        <svg class="icon" aria-hidden="true"><use href="#i-info"></use></svg>
+                        Jak to działa
+                    </div>
                     <div class="info-text">
                         Kliknij „Zaznacz uderzenie” i przeciągnij po wykresie —
                         segment dostanie kolejny numer. Kliknięcie segmentu
@@ -374,7 +443,7 @@
 {{ motion3d_ready|json_script:"motion3d-ready" }}
 
 <script src="https://cdn.plot.ly/plotly-3.7.0.min.js" charset="utf-8"></script>
-<script src="{% static 'js/upload.js' %}"></script>
+<script src="{% static 'js/common.js' %}"></script>
 <script src="{% static 'js/dashboard.js' %}"></script>
 <script src="{% static 'js/segments.js' %}"></script>
 <script src="{% static 'js/sidebar-panels.js' %}"></script>

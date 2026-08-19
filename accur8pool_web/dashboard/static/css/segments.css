@@ -33,14 +33,14 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 28px;
-    height: 28px;
+    width: 30px;
+    height: 30px;
     flex-shrink: 0;
+    padding: 0;
     border: 1px solid var(--border);
     background: var(--bg-card);
     border-radius: var(--radius-sm);
     color: var(--text-secondary);
-    font-size: 15px;
     line-height: 1;
     cursor: pointer;
     transition: var(--transition);
@@ -48,7 +48,7 @@
 
 .seg-back:hover {
     background: var(--accent-light);
-    border-color: var(--accent);
+    border-color: var(--accent-border);
     color: var(--accent);
 }
 
@@ -61,21 +61,22 @@
    po wykresie. */
 .hint.is-armed {
     background: var(--accent-light);
-    border-color: var(--accent);
-    border-style: solid;
-    color: var(--accent-hover);
-    font-weight: 500;
+    border-color: var(--accent-border);
+    color: #1e40af;
+    font-weight: 550;
 }
 
+.hint.is-armed .icon { color: var(--accent); }
+
 .seg-error {
-    font-size: 12px;
+    font-size: var(--fs-sm);
     line-height: 1.5;
     padding: 10px 12px;
-    margin-bottom: 12px;
+    margin-bottom: var(--sp-3);
     border-radius: var(--radius-sm);
     background: var(--danger-bg);
-    border: 1px solid #fecaca;
-    color: #991b1b;
+    border: 1px solid var(--danger-border);
+    color: var(--danger-text);
 }
 
 /* ============================================
@@ -92,9 +93,8 @@
 }
 
 .btn.is-armed:hover {
-    background: #dc2626;
-    border-color: #dc2626;
-    transform: none;
+    background: #b91c1c;
+    border-color: #b91c1c;
 }
 
 /* dashboard.css daje obu przyciskom paska flex: 1, ale „Zaznacz uderzenie”
@@ -142,14 +142,14 @@
     height: 8px;
     border-radius: 50%;
     background: transparent;
-    border: 1px solid var(--border);
+    border: 1px solid var(--border-strong);
     flex-shrink: 0;
 }
 
 .phase-dots-label {
-    font-size: 10px;
+    font-size: var(--fs-xs);
     color: var(--text-muted);
-    margin-left: 4px;
+    margin-left: var(--sp-1);
     font-variant-numeric: tabular-nums;
 }
 
@@ -158,10 +158,10 @@
    ============================================ */
 .seg-detail-head {
     padding: 12px 14px;
-    margin-bottom: 16px;
+    margin-bottom: var(--sp-4);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    background: var(--bg-hover);
+    background: var(--bg-subtle);
 }
 
 .seg-detail-range {
@@ -174,13 +174,14 @@
 }
 
 .seg-detail-range strong {
-    font-size: 14px;
+    font-size: var(--fs-base);
+    font-weight: 650;
     color: var(--text-primary);
 }
 
 .seg-detail-range span {
-    font-size: 11px;
-    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
 }
 
 .seg-detail-actions {
@@ -196,12 +197,12 @@
 }
 
 .phase-section-title {
-    font-size: 11px;
-    font-weight: 600;
+    font-size: var(--fs-xs);
+    font-weight: 650;
     text-transform: uppercase;
-    letter-spacing: 0.5px;
+    letter-spacing: 0.7px;
     color: var(--text-muted);
-    margin-bottom: 8px;
+    margin-bottom: var(--sp-2);
 }
 
 /* ============================================
@@ -227,7 +228,7 @@
     transition: var(--transition);
 }
 
-.phase-item:not(.is-set) { background: var(--bg-hover); }
+.phase-item:not(.is-set) { background: var(--bg-subtle); }
 
 .phase-item:not(.is-set) .phase-swatch { opacity: 0.3; }
 
@@ -239,7 +240,7 @@
 .phase-item.is-armed {
     border-color: var(--accent);
     background: var(--accent-light);
-    box-shadow: var(--shadow-sm);
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
 }
 
 .phase-swatch {
@@ -252,16 +253,16 @@
 .phase-info { flex: 1; min-width: 0; }
 
 .phase-name {
-    font-size: 13px;
-    font-weight: 500;
+    font-size: var(--fs-md);
+    font-weight: 550;
     color: var(--text-primary);
 }
 
 .phase-range {
-    font-size: 11px;
-    color: var(--text-secondary);
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
     font-variant-numeric: tabular-nums;
-    margin-top: 2px;
+    margin-top: 1px;
 }
 
 .phase-actions {
@@ -272,20 +273,21 @@
 }
 
 .phase-btn {
-    padding: 5px 10px;
+    padding: 5px 11px;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: var(--radius-xs);
     background: var(--bg-card);
     color: var(--text-secondary);
     font-family: inherit;
-    font-size: 11px;
-    font-weight: 500;
+    font-size: var(--fs-sm);
+    font-weight: 550;
     cursor: pointer;
     transition: var(--transition);
 }
 
 .phase-btn:hover {
-    border-color: var(--accent);
+    border-color: var(--accent-border);
+    background: var(--accent-light);
     color: var(--accent);
 }
 

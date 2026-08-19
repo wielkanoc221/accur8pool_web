@@ -1,0 +1,136 @@
+{
+  "name": "Demo",
+  "file": "demo.csv",
+  "segments": [
+    {
+      "start": 218,
+      "end": 945,
+      "phases": [
+        {
+          "phase": "przygotowanie",
+          "start": 218,
+          "end": 349
+        },
+        {
+          "phase": "przymierzanie",
+          "start": 349,
+          "end": 757
+        },
+        {
+          "phase": "uderzenie",
+          "start": 756,
+          "end": 837
+        },
+        {
+          "phase": "po_uderzeniu",
+          "start": 837,
+          "end": 945
+        }
+      ]
+    },
+    {
+      "start": 6187,
+      "end": 7119,
+      "phases": [
+        {
+          "phase": "przygotowanie",
+          "start": 6187,
+          "end": 6447
+        },
+        {
+          "phase": "przymierzanie",
+          "start": 6446,
+          "end": 6829
+        },
+        {
+          "phase": "uderzenie",
+          "start": 6828,
+          "end": 6870
+        },
+        {
+          "phase": "po_uderzeniu",
+          "start": 6869,
+          "end": 7119
+        }
+      ]
+    },
+    {
+      "start": 9271,
+      "end": 10091,
+      "phases": [
+        {
+          "phase": "przygotowanie",
+          "start": 9271,
+          "end": 9414
+        },
+        {
+          "phase": "przymierzanie",
+          "start": 9413,
+          "end": 9867
+        },
+        {
+          "phase": "uderzenie",
+          "start": 9866,
+          "end": 9909
+        },
+        {
+          "phase": "po_uderzeniu",
+          "start": 9909,
+          "end": 10091
+        }
+      ]
+    },
+    {
+      "start": 11960,
+      "end": 12682,
+      "phases": [
+        {
+          "phase": "przygotowanie",
+          "start": 11960,
+          "end": 12185
+        },
+        {
+          "phase": "przymierzanie",
+          "start": 12184,
+          "end": 12474
+        },
+        {
+          "phase": "uderzenie",
+          "start": 12473,
+          "end": 12518
+        },
+        {
+          "phase": "po_uderzeniu",
+          "start": 12518,
+          "end": 12682
+        }
+      ]
+    },
+    {
+      "start": 13435,
+      "end": 14037,
+      "phases": [
+        {
+          "phase": "przygotowanie",
+          "start": 13435,
+          "end": 13537
+        },
+        {
+          "phase": "przymierzanie",
+          "start": 13538,
+          "end": 13781
+        },
+        {
+          "phase": "uderzenie",
+          "start": 13781,
+          "end": 13838
+        },
+        {
+          "phase": "po_uderzeniu",
+          "start": 13837,
+          "end": 14037
+        }
+      ]
+    }
+  ]
+}

@@ -24,5 +24,12 @@ urlpatterns = [
     path("", include("account.urls")),
     path('', include('dashboard.urls')),
 
-    path('', RedirectView.as_view(url='/login'))
+    # Wejście na gołą domenę prowadzi TAM, GDZIE SIĘ PRACUJE, czyli na
+    # dashboard. O logowanie prosi dopiero on sam (@login_required →
+    # LOGIN_URL), więc niezalogowany dostaje ekran logowania z ?next=
+    # i po zalogowaniu ląduje z powrotem tutaj. Odwrotna kolejność —
+    # najpierw logowanie, dashboard po nim — kazała zalogowanemu
+    # użytkownikowi przechodzić przez ekran, który nie ma mu nic do
+    # powiedzenia.
+    path('', RedirectView.as_view(pattern_name='dashboard'))
 ]

@@ -21,11 +21,16 @@ document.addEventListener('DOMContentLoaded', function () {
     nav.setAttribute('aria-label', 'Nawigacja główna');
     document.body.appendChild(nav);
 
+    /** `icon` to nazwa symbolu ze sprite'u (dashboard/templates/icons.html),
+     *  bez „#i-”. Jednokolorowe ikony zamiast emoji: na dolnym pasku stan
+     *  aktywny jest oznaczony KOLOREM, a kolorowe emoji tej zmiany nie
+     *  pokazywały. */
     function addNavButton(icon, label, onClick) {
         const btn = document.createElement('button');
         btn.type = 'button';
         btn.className = 'mobile-nav-btn';
-        btn.innerHTML = `<span class="mnav-icon" aria-hidden="true">${icon}</span><span>${label}</span>`;
+        btn.innerHTML = `<span class="mnav-icon"><svg class="icon icon-lg" aria-hidden="true">` +
+                        `<use href="#i-${icon}"></use></svg></span><span>${label}</span>`;
         btn.addEventListener('click', onClick);
         nav.appendChild(btn);
         return btn;
@@ -62,27 +67,27 @@ document.addEventListener('DOMContentLoaded', function () {
     }
 
     // --- Przyciski paska ---
-    const btnMenu = addNavButton('☰', 'Menu', function () {
+    const btnMenu = addNavButton('menu', 'Menu', function () {
         sidebar.classList.contains('open') ? closeAll() : openSidebar(false);
     });
 
-    const btnFiles = addNavButton('📁', 'Pliki', function () {
+    const btnFiles = addNavButton('folder', 'Pliki', function () {
         openSidebar(true);
     });
 
     // Segmenty i reset zoomu mają sens tylko na dashboardzie
     let btnSegments = null;
     if (segmentsPanel) {
-        btnSegments = addNavButton('✂️', 'Segmenty', function () {
+        btnSegments = addNavButton('scissors', 'Segmenty', function () {
             segmentsPanel.classList.contains('open') ? closeAll() : openSegments();
         });
 
         // Akcje z topbaru (ukrytego na mobile) muszą być gdzieś dostępne
-        addNavButton('🔍', 'Reset', function () {
+        addNavButton('reset', 'Reset', function () {
             if (typeof window.resetZoom === 'function') window.resetZoom();
         });
     } else if (typeof window.loadDatasets === 'function') {
-        addNavButton('🔄', 'Odśwież', function () {
+        addNavButton('refresh', 'Odśwież', function () {
             window.loadDatasets();
         });
     }

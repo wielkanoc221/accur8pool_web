@@ -3,7 +3,6 @@ from pathlib import Path
 import pandas as pd
 from pandas import DataFrame
 from .const import *
-
 from .data_transformations import DataFrameTransformerBase, DataFrameTransformerV2
 
 
@@ -32,22 +31,11 @@ def transform_raw_df(df: DataFrame) -> pd.DataFrame:
 
         else:
             transformer = DataFrameTransformerBase
-
-        # Transformer dobieramy po csv_version, ale ZESTAW KOLUMN też
-        # zależy od wersji zapisu — nie każda niesie magnetometr, linacc
-        # czy wektor obrotu. Listy powyżej opisują komplet, więc filtrujemy
-        # to, co faktycznie jest w pliku; inaczej brak jednej kolumny
-        # kończy się KeyError i cały plik zostaje bez wersji przygotowanej.
-        # Kolumny wymagane przez dalsze kroki (acc*, gyr*, timestamp) i tak
-        # muszą być — na ich braku transformacja ma prawo się wywrócić.
-        present = [c for c in COLUMNS_TO_FILTER_10_CUT_OFF if c in df.columns]
-        present_5 = [c for c in COLUMNS_TO_FILTER_5_CUT_OFF if c in df.columns]
-
         return (
             transformer(df)
             .dt_ms_to_sec()
-            .lowpass(columns=present, cutoff=10)
-            .lowpass(columns=present_5, cutoff=5)
+            .lowpass(columns=COLUMNS_TO_FILTER_10_CUT_OFF, cutoff=10)
+            .lowpass(columns=COLUMNS_TO_FILTER_5_CUT_OFF, cutoff=5)
             .add_magnitude([ACC_X, ACC_Y, ACC_Z], ACC_MAGNITUDE)
             .add_magnitude([GYR_X, GYR_Y, GYR_Z], GYR_MAGNITUDE)
             .add_time()
@@ -90,45 +78,68 @@ def get_csv_paths(input_dir):
 
 def read_csv(path):
     try:
-        try:
-            df = pd.read_csv(path, engine="pyarrow")
-        except ImportError:
-            # pyarrow jest tylko przyspieszaczem — bez niego czytamy
-            # domyślnym silnikiem pandas zamiast wywracać cały import.
-            df = pd.read_csv(path)
+        df = pd.read_csv(path, engine="pyarrow")
 
     except Exception as e:
         raise FileReadException(e)
 
     return df
 
+REQUIRED_COLUMNS = (ACC_X, ACC_Y, ACC_Z, GYR_X, GYR_Y, GYR_Z, TIMESTAMP)
 
-def prepare_raw_file_and_save(input_path: Path, output_dir: Path, filename: str = None) -> Path:
+COLUMNS_TO_FILTER_10_CUT_OFF = ["accx", "accy", "accz",
+                                "linaccx", "linaccy", "linaccz"]
+
+COLUMNS_TO_FILTER_5_CUT_OFF = ["gyrx", "gyry", "gyrz", "magx", "magy", "magz"]
+
+def missing_required_columns(df: DataFrame) -> list[str]:
+    """Kolumny z REQUIRED_COLUMNS, których w ramce nie ma — w kolejności
+    z REQUIRED_COLUMNS, żeby komunikat dla użytkownika był powtarzalny."""
+    present = set(df.columns)
+    return [column for column in REQUIRED_COLUMNS if column not in present]
+
+def prepare_raw_file_and_save(input_path: Path, output_dir: Path,
+                              filename: str = None) -> Path:
     """Przygotowuje JEDEN surowy plik i zapisuje go w output_dir.
 
-    Wydzielone z pętli `prepare_raw_data_and_save`, bo tej samej ścieżki
-    (odczyt → transformacja → zapis) używa upload w aplikacji webowej,
-    gdzie plik przychodzi pojedynczo. Wyjątki lecą dalej — o tym, czy
-    błąd tylko logujemy, czy przerywa całość, decyduje wołający.
+    Tej samej ścieżki (odczyt → sprawdzenie kolumn → transformacja → zapis)
+    używa upload w aplikacji webowej, gdzie plik przychodzi pojedynczo.
+    Wyjątki lecą dalej — o tym, czy błąd tylko logujemy, czy przerywa
+    całość, decyduje wołający.
+
+    Komplet kolumn sprawdzamy TUTAJ, przed transformacją, bo w aplikacji
+    webowej to jedyny moment, w którym da się powiedzieć użytkownikowi coś
+    konkretnego: bez wersji przygotowanej plik nie wchodzi do systemu
+    w ogóle, więc komunikat „brakuje kolumn accx, accy” jest jedyną
+    informacją, jaką dostanie. Wyjątek z głębi transformacji niesie
+    najwyżej KeyError z nazwą jednej kolumny.
     """
     input_path = Path(input_path)
     output_dir = Path(output_dir)
     filename = filename or input_path.name
 
     df = read_csv(input_path)
-    df['session_index'] = input_path.stem
-    transformed = transform_raw_df(df)
-    save_data(transformed, output_dir, filename)
+
+    missing = missing_required_columns(df)
+    if missing:
+        raise WrongColumnsException("Brakuje wymaganych kolumn: " + ", ".join(missing))
+
+    # Nazwa pliku źródłowego zostaje w danych — po scaleniu kilku nagrań
+    # w jedną ramkę to jedyne, co mówi, z którego zapisu pochodzi wiersz.
+    df["session_index"] = input_path.stem
+
+    save_data(transform_raw_df(df), output_dir, filename)
     return output_dir / filename
-
-
 def prepare_raw_data_and_save(input_paths: list[Path], output_dir: Path):
     print(f'input_files: {len(input_paths)}')
     output_dir.mkdir(exist_ok=True, parents=True)
     for index, path in enumerate(input_paths, start=1):
         try:
             print(index, '/', len(input_paths))
-            prepare_raw_file_and_save(path, output_dir)
+            df = read_csv(path)
+            df['session_index'] = path.stem
+            transformed = transform_raw_df(df)
+            save_data(transformed, output_dir, path.name)
 
         except FileReadException as e:
             print(f'ERROR blad odczytu pliku {path} {e} ')
