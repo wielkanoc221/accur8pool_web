@@ -62,7 +62,7 @@ class Series:
 
     def payload(self, names=None, lo: int = 0, hi: int = None,
                 buckets: int = TARGET_BUCKETS) -> dict:
-        """{nazwa: {"x": [...], "y": [...]}} po decymacji zakresu [lo, hi)."""
+
         hi = self.rows if hi is None else min(hi, self.rows)
         lo = max(0, lo)
 

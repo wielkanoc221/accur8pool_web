@@ -462,7 +462,7 @@ class UploadTests(BaseDataTest):
         # zostawiał wielokrotnie więcej wysokich częstotliwości, niż
         # deklarował. Sprawdzamy to na samym transformerze, bo w gotowym
         # pliku widać już tylko skutek.
-        from utils.data_processing.data_transformations import DataFrameTransformerBase
+        from data_processing.data_transformations import DataFrameTransformerBase
 
         df = pd.DataFrame({"timestamp": np.full(2000, 1000.0 / FS_IMU),
                            "accx": np.zeros(2000)})

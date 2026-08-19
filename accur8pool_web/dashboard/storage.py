@@ -9,13 +9,8 @@ Dane użytkownika leżą w DWÓCH równoległych drzewach o tej samej strukturze
                    jerk, roll/pitch), liczony w trakcie uploadu.
 
 APLIKACJA CZYTA WYŁĄCZNIE Z prepared_data — wykres 2D, doczytywanie
-zakresów i animacja 3D dostają dokładnie ten sam plik, więc numer wiersza
-znaczy wszędzie to samo. Zestaw bez wersji przygotowanej nie jest w ogóle
-pokazywany, a upload, któremu jej nie udało się policzyć, jest odrzucany
-razem z plikiem surowym.
+zakresów i animacja 3D dostają dokładnie ten sam plik.
 
-Cała wiedza o tym układzie siedzi tutaj: widoki dostają gotowe ścieżki
-i nie sklejają ich same z nazw z URL-a.
 """
 
 from __future__ import annotations
@@ -31,6 +26,9 @@ from .models import Dataset
 
 logger = logging.getLogger(__name__)
 
+import sys, os
+print("CWD:", os.getcwd())
+print("PATH0:", sys.path[0])
 
 class DataPreparationUnavailable(Exception):
     """Awaria wdrożenia, nie wada wgranego pliku — patrz DatasetStorage.prepare."""
@@ -256,10 +254,10 @@ def _data_preparation_module():
     wyłącznie tutaj — bez niej reszta dashboardu ma działać normalnie.
     """
     try:
-        from utils.data_processing import prepare_raw_data
+        from data_processing import prepare_raw_data
     except ImportError:
         try:
-            from accur8pool_web.utils.data_processing import prepare_raw_data
+            from accur8pool_web.data_processing import prepare_raw_data
         except ImportError as exc:
             raise DataPreparationUnavailable(str(exc)) from exc
     return prepare_raw_data
