@@ -442,11 +442,12 @@
             // przebudowuje scenę WebGL, więc pięć osobnych wywołań to pięć
             // przebudów zamiast jednej — i to widać jako szarpanie.
             const dynamic = payload.dynamic;
+            const point = { x: [position[0]], y: [position[1]], z: [position[2]] };
             Plotly.restyle(this.plot, {
-                x: [trail.x, watch.x, axes[0].x, axes[1].x, axes[2].x],
-                y: [trail.y, watch.y, axes[0].y, axes[1].y, axes[2].y],
-                z: [trail.z, watch.z, axes[0].z, axes[1].z, axes[2].z]
-            }, [dynamic.trail, dynamic.watch,
+                x: [trail.x, point.x, watch.x, axes[0].x, axes[1].x, axes[2].x],
+                y: [trail.y, point.y, watch.y, axes[0].y, axes[1].y, axes[2].y],
+                z: [trail.z, point.z, watch.z, axes[0].z, axes[1].z, axes[2].z]
+            }, [dynamic.trail, dynamic.marker, dynamic.watch,
                 dynamic.axes[0], dynamic.axes[1], dynamic.axes[2]]);
 
             this._highlightPhase(scene, payload.phase[frame]);
@@ -920,7 +921,20 @@
         static _diagnostics(meta) {
             const details = [meta.label];
             if (meta.span_cm) details.push('scena ' + meta.span_cm.toFixed(1) + ' cm');
+            // Zaraz za bokiem sceny, bo dopiero ta para daje skalę obrazu:
+            // koperta ma stały rozmiar w centymetrach, więc stosunek tych
+            // dwóch liczb to tyle, ile razy zamach był większy od zegarka.
+            if (meta.watch_cm) details.push('zegarek ' + meta.watch_cm.toFixed(1) + ' cm');
             if (meta.stride > 1) details.push('co ' + meta.stride + '. próbka');
+            // Cena podwójnego całkowania. Dopóki filtr usunął mało, tor
+            // jest pomiarem; powyżej połowy rozpiętości kształt jest już
+            // w większości dziełem filtru i trzeba to powiedzieć wprost.
+            if (meta.drift_ratio > 0.5) {
+                details.push('UWAGA: filtr usunął dryf ' + meta.drift_cm.toFixed(0) +
+                             ' cm — zaznacz krótszy segment');
+            } else if (meta.drift_cm > 0) {
+                details.push('dryf odcięty ' + meta.drift_cm.toFixed(1) + ' cm');
+            }
             if (meta.gaps) details.push(meta.gaps + ' × przerwa w nagraniu (skrócona)');
             if (meta.rot_vs_gyro !== null && meta.rot_vs_gyro > 0.35) {
                 details.push('rozjazd z żyroskopem ' +

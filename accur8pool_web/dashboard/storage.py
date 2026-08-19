@@ -34,6 +34,14 @@ class DataPreparationUnavailable(Exception):
     """Awaria wdrożenia, nie wada wgranego pliku — patrz DatasetStorage.prepare."""
 
 
+# Warianty pliku, które użytkownik może pobrać. Klucz trafia wprost do
+# URL-a, więc jest krótki i bez polskich znaków; etykieta dla oka siedzi
+# po stronie przeglądarki (downloads.js).
+KIND_RAW = "raw"
+KIND_PREPARED = "prepared"
+DOWNLOAD_KINDS = (KIND_RAW, KIND_PREPARED)
+
+
 class DatasetStorage:
     """Dwa drzewa plików JEDNEGO użytkownika.
 
@@ -93,12 +101,42 @@ class DatasetStorage:
                 return dataset
         return None
 
+    def owned(self):
+        """WSZYSTKIE zestawy tego użytkownika — także te bez wersji przygotowanej.
+
+        Reszta aplikacji patrzy przez resolve()/readable(), czyli wyłącznie
+        na zestawy dające się otworzyć. Pobieranie jest jedynym miejscem,
+        gdzie taki filtr szkodzi: plik, którego nie da się narysować, wciąż
+        wolno użytkownikowi zabrać z serwera.
+        """
+        return Dataset.objects.filter(owner=self.user)
+
     def readable(self):
         """Pary (dataset, ścieżka) dla zestawów, które da się otworzyć."""
-        for dataset in Dataset.objects.filter(owner=self.user):
+        for dataset in self.owned():
             path = self.path_for(dataset)
             if path.exists():
                 yield dataset, path
+
+    # ------------------------------------------------------------
+    #  POBIERANIE
+    # ------------------------------------------------------------
+
+    def download_path(self, dataset: Dataset, kind: str) -> Path | None:
+        """Plik danego wariantu albo None, gdy tego wariantu nie ma na dysku.
+
+        Brak wersji surowej to normalny stan, a nie usterka: zestaw
+        demonstracyjny wchodzi przez install_prepared, więc nigdy jej nie
+        miał. Nieznany `kind` też kończy się None — dzięki temu widok ma
+        jedno miejsce, w którym odpowiada „nie ma czego pobrać”.
+        """
+        if kind == KIND_RAW:
+            path = self.raw_path_for(dataset.filename)
+        elif kind == KIND_PREPARED:
+            path = self.path_for(dataset)
+        else:
+            return None
+        return path if path.exists() else None
 
     # ------------------------------------------------------------
     #  UPLOAD
@@ -219,6 +257,55 @@ def dataset_meta(dataset: Dataset, path: Path = None, records: int = None) -> di
         "updated_at": dataset.uploaded_at.strftime("%Y-%m-%d %H:%M"),
         "url": f"/dashboard/{quote(dataset.filename)}/",
     }
+
+
+def download_meta(storage: DatasetStorage, dataset: Dataset) -> dict:
+    """Zestaw w postaci, w jakiej widzi go strona „Pobieranie”.
+
+    Rozmiary bierzemy z systemu plików, a nie z liczby rekordów: tutaj
+    użytkownik decyduje, czy ściągać 300 MB, więc interesuje go waga pliku,
+    a nie jego długość. Zliczanie wierszy oznaczałoby przeczytanie każdego
+    pliku po kolei tylko po to, żeby narysować listę.
+    """
+    files = {}
+    for kind in DOWNLOAD_KINDS:
+        path = storage.download_path(dataset, kind)
+        files[kind] = {
+            "available": path is not None,
+            "size": file_size(path),
+            "url": (f"/api/datasets/{quote(dataset.filename)}/download/{kind}/"
+                    if path is not None else None),
+        }
+
+    return {
+        "id": dataset.filename,
+        "name": dataset.filename,
+        "uploaded_at": dataset.uploaded_at.strftime("%Y-%m-%d %H:%M"),
+        "files": files,
+    }
+
+
+def download_name(filename: str, kind: str) -> str:
+    """Nazwa, pod którą plik ląduje na dysku użytkownika.
+
+    Oba warianty nazywają się na serwerze tak samo. Pobrane do jednego
+    katalogu dałyby „ruch.csv” i „ruch (1).csv” — po nazwie nie dałoby się
+    poznać, który jest surowy, a który przygotowany.
+    """
+    if kind != KIND_PREPARED:
+        return filename
+    stem, suffix = Path(filename).stem, Path(filename).suffix
+    return f"{stem}-przygotowany{suffix}"
+
+
+def file_size(path: Path | None):
+    """Rozmiar w bajtach albo None, gdy pliku nie da się sprawdzić."""
+    if path is None:
+        return None
+    try:
+        return path.stat().st_size
+    except OSError:
+        return None
 
 
 def count_records(path: Path):

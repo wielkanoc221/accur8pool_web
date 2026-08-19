@@ -9,6 +9,7 @@ urlpatterns = [
     path("dashboard/<str:filename>/", views.dashboard, name="dashboard"),
     path("logout", views.logout_view, name="logout"),
     path("datasets/", views.datasets_view, name="datasets"),
+    path("downloads/", views.downloads_view, name="downloads"),
 
     # Endpointy API są klasami: metoda HTTP wybiera operację, a Django
     # rozdziela ją samo (GET/POST, PATCH/DELETE, PUT/DELETE).
@@ -18,6 +19,12 @@ urlpatterns = [
     path("api/datasets/upload/",
          views.DatasetUploadView.as_view(),
          name="api_upload_dataset"),
+    path("api/downloads/",
+         views.DownloadListView.as_view(),
+         name="api_downloads"),
+    path("api/datasets/<str:filename>/download/<str:kind>/",
+         views.DatasetDownloadView.as_view(),
+         name="api_dataset_download"),
     path("api/datasets/<str:filename>/range/",
          views.DatasetRangeView.as_view(),
          name="api_dataset_range"),

@@ -8,9 +8,10 @@ nie miały wcześniej żadnego pokrycia, a to one zmieniają stan w bazie.
 
 import json
 
+from django.contrib.auth.models import User
 from django.urls import reverse
 
-from .models import Segment, SubSegment
+from .models import Dataset, Segment, SubSegment
 from .tests import BaseDataTest
 
 
@@ -147,3 +148,77 @@ class SegmentMutationTests(BaseDataTest):
         data = self.client.get(reverse("api_datasets")).json()
         self.assertEqual([item["name"] for item in data], ["ruch.csv"])
         self.assertGreater(data[0]["records"], 0)
+
+
+class DownloadTests(BaseDataTest):
+    """Wydawanie plików ze strony „Pobieranie”.
+
+    BaseDataTest.upload kładzie plik w OBU drzewach, więc domyślnie oba
+    warianty istnieją — testy braku wersji surowej kasują ją same.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.dataset = self.upload("ruch.csv")
+
+    def download_url(self, kind, filename="ruch.csv"):
+        return reverse("api_dataset_download", args=[filename, kind])
+
+    def test_lista_pokazuje_oba_warianty(self):
+        data = self.client.get(reverse("api_downloads")).json()
+        self.assertEqual([item["name"] for item in data], ["ruch.csv"])
+
+        files = data[0]["files"]
+        for kind in ("raw", "prepared"):
+            with self.subTest(kind=kind):
+                self.assertTrue(files[kind]["available"])
+                self.assertGreater(files[kind]["size"], 0)
+
+    def test_brak_wersji_surowej_nie_ukrywa_zestawu(self):
+        """Zestaw demonstracyjny wchodzi bez surowego pliku — ma zostać
+        na liście z jednym wariantem, a nie zniknąć."""
+        (self.tmp_dir / str(self.user.pk) / "ruch.csv").unlink()
+
+        files = self.client.get(reverse("api_downloads")).json()[0]["files"]
+        self.assertFalse(files["raw"]["available"])
+        self.assertIsNone(files["raw"]["url"])
+        self.assertTrue(files["prepared"]["available"])
+
+        self.assertEqual(self.client.get(self.download_url("raw")).status_code, 404)
+
+    def test_pobranie_wydaje_plik_jako_zalacznik(self):
+        for kind, nazwa in (("raw", "ruch.csv"), ("prepared", "ruch-przygotowany.csv")):
+            with self.subTest(kind=kind):
+                response = self.client.get(self.download_url(kind))
+                self.assertEqual(response.status_code, 200)
+                self.assertIn(f'filename="{nazwa}"',
+                              response["Content-Disposition"])
+                self.assertIn("attachment", response["Content-Disposition"])
+                self.assertTrue(b"".join(response.streaming_content))
+
+    def test_zestaw_bez_wersji_przygotowanej_wciaz_do_pobrania(self):
+        """Reszta aplikacji takiego zestawu nie widzi (resolve go odrzuca),
+        ale przesłanego pliku nie ma powodu użytkownikowi zabierać."""
+        (self.prepared_dir / str(self.user.pk) / "ruch.csv").unlink()
+
+        self.assertEqual(self.client.get(self.download_url("raw")).status_code, 200)
+        self.assertEqual(self.client.get(self.download_url("prepared")).status_code, 404)
+
+    def test_nieznany_wariant_to_404(self):
+        self.assertEqual(self.client.get(self.download_url("bzdura")).status_code, 404)
+
+    def test_cudzy_plik_to_404(self):
+        obcy = User.objects.create_user("bob", password="tajne-haslo-123")
+        Dataset.objects.create(owner=obcy, filename="obcy.csv")
+        katalog = self.prepared_dir / str(obcy.pk)
+        katalog.mkdir(parents=True, exist_ok=True)
+        (katalog / "obcy.csv").write_text("a,b\n1,2\n", encoding="utf-8")
+
+        response = self.client.get(self.download_url("prepared", "obcy.csv"))
+        self.assertEqual(response.status_code, 404)
+
+    def test_bez_logowania_nie_ma_pobierania(self):
+        self.client.logout()
+        for url in (reverse("api_downloads"), self.download_url("prepared")):
+            with self.subTest(url=url):
+                self.assertIn(self.client.get(url).status_code, (302, 403))

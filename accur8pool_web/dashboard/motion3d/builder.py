@@ -10,10 +10,11 @@ from __future__ import annotations
 import numpy as np
 
 from . import scene as scene_module
+from .constants import WATCH_LENGTH_CM
 from .frames import FrameSampler
-from .lever_arm import LeverArm
 from .orientation import Orientation
 from .recording import RecordingWindow, SensorRecording
+from .trajectory import Trajectory
 
 
 class MotionBuilder:
@@ -29,7 +30,7 @@ class MotionBuilder:
 
         self._window: RecordingWindow = recording.window(lo, hi)
         self._orientation = Orientation.solve(self._window, smooth=smooth)
-        self._lever = LeverArm.fit(self._window, self._orientation)
+        self._trajectory = Trajectory.solve(self._window, self._orientation)
 
     # ------------------------------------------------------------
     #  WYNIK
@@ -38,8 +39,8 @@ class MotionBuilder:
     def build(self) -> dict:
         window = self._window
 
-        positions = self._lever.positions(self._orientation)          # [m]
-        velocities = self._lever.velocities(self._orientation)        # [m/s]
+        positions = self._trajectory.position                         # [m]
+        velocities = self._trajectory.velocity                        # [m/s]
 
         frames = FrameSampler.of(window.sample_count, window.sample_rate, self._fps)
         frame_seconds = frames.take(window.seconds)
@@ -52,7 +53,7 @@ class MotionBuilder:
         positions_cm = frame_positions * 100.0
 
         bounds = scene_module.SceneBounds.around(positions_cm, self._watch_scale)
-        watch = scene_module.WatchGeometry.of(bounds.watch_size)
+        watch = scene_module.WatchGeometry.of(bounds.watch_scale)
 
         spans = scene_module.phase_spans(
             self._phases, window.seconds, window.lo, window.hi, frame_seconds)
@@ -94,12 +95,12 @@ class MotionBuilder:
         """Opis rekonstrukcji: co policzono, z czego i jak dobrze."""
         window = self._window
         orientation = self._orientation
-        lever = self._lever
+        trajectory = self._trajectory
 
         return {
-            "label": f"{orientation.description}; {lever.describe()}",
+            "label": f"{orientation.description}; {trajectory.describe()}",
             "source": orientation.source,
-            "acc_source": lever.acc_source,
+            "acc_source": trajectory.acc_source,
             "frames": len(frames),
             # Ostatnia klatka JEST ostatnią próbką zaznaczenia, więc czas
             # animacji i długość wycinka to jedno i to samo.
@@ -118,16 +119,25 @@ class MotionBuilder:
             "hi": window.hi,
             "path_cm": round(path_m * 100.0, 2),
             "v_max": round(max_speed, 4),
-            "has_position": lever.known,
-            # Długość dopasowanego ramienia i jakość dopasowania. Bez tej
-            # pary nie da się odróżnić „ruch był mały” od „modelu nie ma jak
-            # dopasować”.
-            "lever_cm": round(lever.length_m * 100.0, 1),
-            "lever_fit": round(lever.quality, 3),
+            "has_position": trajectory.known,
+            # Ile toru usunął filtr dryfu — w centymetrach i w stosunku do
+            # tego, co zostało na ekranie. To jest CENA podwójnego
+            # całkowania i jedyna liczba, po której da się poznać, że
+            # oglądany kształt jest w większości dziełem filtru, a nie
+            # pomiaru. Bez niej długi segment rysuje wiarygodnie wyglądającą
+            # pętlę, która jest czystym odpłynięciem całkowania.
+            "drift_cm": round(trajectory.drift_m * 100.0, 1),
+            "drift_ratio": round(trajectory.drift_ratio, 3),
             # Bok sześcianu sceny. Bez tej liczby „mały ruch” i „duży ruch”
             # wyglądają na ekranie tak samo — scena skaluje się do
             # zawartości, więc dopiero ona mówi, co się właściwie ogląda.
             "span_cm": round(bounds.side, 3),
+            # Dłuższy bok narysowanej koperty. Stoi obok span_cm celowo:
+            # ta para to CAŁA skala obrazu — „zegarek 4.4 cm na scenie
+            # 62 cm” mówi wprost, ile razy zamach był większy od
+            # urządzenia. Przy ręcznym ?watch= liczba rośnie i od razu
+            # widać, że proporcja przestała być prawdziwa.
+            "watch_cm": round(WATCH_LENGTH_CM * bounds.watch_scale, 2),
             "time_source": self._recording.time.source,
             "gaps": self._recording.time.gaps,
             "phases": spans,

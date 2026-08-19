@@ -1,5 +1,6 @@
 import shutil
 import tempfile
+from collections import Counter
 from pathlib import Path
 from unittest import mock
 
@@ -11,6 +12,7 @@ from django.test import TestCase
 from django.urls import reverse
 
 from . import demo, motion3d, views
+from .motion3d import constants as motion3d_constants, scene
 from .models import Dataset, Segment, SubSegment
 
 User = get_user_model()
@@ -166,6 +168,329 @@ class Motion3DSupportTests(TestCase):
         self.assertFalse(motion3d.supports(["accx", "accy", "accz", "timestamp"]))
 
 
+def uderzenie_csv(seconds=0.8, v_max=1.5, margines=0.3, bias=0.0, fs=400.0):
+    """Zapis JEDNEGO uderzenia: spoczynek → ruch → spoczynek.
+
+    Tak wygląda segment, który użytkownik zaznacza na wykresie, i tylko na
+    takim da się odtworzyć prędkość DOKŁADNIE: całkowanie daje ją
+    z dokładnością do stałej, a spoczynek na końcach tę stałą ustala.
+
+    Ruch idzie wzdłuż X, bez obrotu (R = I), więc przyspieszenie
+    urządzenia jest zarazem przyspieszeniem świata i prawdę widać wprost.
+    `bias` to stały błąd zera akcelerometru — ma NIE wpływać na wynik.
+    """
+    n_ruch, n_margines = int(fs * seconds), int(fs * margines)
+    n = n_ruch + 2 * n_margines
+    t = np.arange(n) / fs
+
+    predkosc = np.zeros(n)
+    predkosc[n_margines:n_margines + n_ruch] = v_max * np.sin(
+        np.pi * (np.arange(n_ruch) / fs) / seconds) ** 2
+
+    droga_m = np.trapezoid(predkosc, t)
+    przyspieszenie = np.gradient(predkosc, t) + bias
+
+    kolumny = {
+        "accx": przyspieszenie, "accy": np.zeros(n), "accz": np.full(n, 9.80665),
+        "gyrx": np.zeros(n), "gyry": np.zeros(n), "gyrz": np.zeros(n),
+        "timestamp": np.full(n, 1000.0 / fs),
+        "linaccx": przyspieszenie, "linaccy": np.zeros(n), "linaccz": np.zeros(n),
+        "rotx": np.zeros(n), "roty": np.zeros(n), "rotz": np.zeros(n),
+    }
+    wiersze = np.column_stack(list(kolumny.values()))
+    tekst = (",".join(kolumny) + "\n" +
+             "\n".join(",".join(f"{v:.17g}" for v in w) for w in wiersze) + "\n")
+    return tekst, n, droga_m * 100.0
+
+
+class PredkoscTests(BaseDataTest):
+    """v_max na segmencie od spoczynku do spoczynku.
+
+    Wcześniej filtr średniej kroczącej zaniżał tu prędkość o 33–50%:
+    prędkość pojedynczego uderzenia jest jednostronnym garbem, a jego
+    średnia krocząca to spory ułamek szczytu, więc odjęcie jej ścinało
+    połowę sygnału. Odjęcie tego, co narosło z błędu zera (rampa między
+    końcami), tego nie robi.
+    """
+
+    def zapisz(self, nazwa, tresc):
+        path = self.tmp_dir / nazwa
+        path.write_text(tresc, encoding="utf-8")
+        return path
+
+    def _rekonstrukcja(self, nazwa, **kwargs):
+        tresc, n, droga_cm = uderzenie_csv(**kwargs)
+        prep = motion3d.prepare(self.zapisz(nazwa, tresc))
+        return motion3d.build_motion(prep, 0, n - 1)["meta"], droga_cm
+
+    def test_predkosc_szczytowa_jest_dokladna(self):
+        meta, droga_cm = self._rekonstrukcja("ud.csv")
+
+        self.assertAlmostEqual(meta["v_max"], 1.5, delta=0.05)
+        self.assertAlmostEqual(meta["path_cm"], droga_cm, delta=1.0)
+
+    def test_blad_zera_akcelerometru_nie_zmienia_wyniku(self):
+        """Stały bias znika przy odejmowaniu średniej przyspieszenia —
+        bo na segmencie od spoczynku do spoczynku ∫a dt = Δv = 0, więc
+        średnia PRAWDZIWEGO przyspieszenia jest zerem."""
+        czysty, _ = self._rekonstrukcja("czysty.csv")
+        obciazony, _ = self._rekonstrukcja("bias.csv", bias=1.0)
+
+        self.assertAlmostEqual(obciazony["v_max"], czysty["v_max"], delta=0.02)
+        self.assertAlmostEqual(obciazony["path_cm"], czysty["path_cm"], delta=1.0)
+
+    def test_spoczynek_na_koncach_jest_rozpoznany(self):
+        meta, _ = self._rekonstrukcja("spokoj.csv")
+        self.assertIn("spoczynku", meta["label"])
+
+    def test_wycinek_ze_srodka_ruchu_nie_udaje_spoczynku(self):
+        """Zaznaczenie ucięte w ruchu MUSI wrócić na filtr średniej.
+
+        Prędkości początkowej nie ma tam z czego wziąć, a założenie
+        „stoi na końcach” zawyżyłoby ją dwukrotnie. Interfejs ma o tym
+        powiedzieć wprost, zamiast podawać liczbę bez zastrzeżenia.
+        """
+        prep = motion3d.prepare(self.zapisz("ciagly.csv", imu_csv(seconds=8.0)))
+        okres = int(FS_IMU / FREQ)
+        meta = motion3d.build_motion(prep, int(FS_IMU * 3),
+                                     int(FS_IMU * 3) + okres * 3)["meta"]
+
+        self.assertNotIn("spoczynku", meta["label"])
+        self.assertIn("ucięty w ruchu", meta["label"])
+
+    def test_dlugie_nagranie_nie_ucieka_w_linii_prostej(self):
+        """Tor długiego nagrania ma zostać w kadrze, a nie odjechać.
+
+        Warunek spoczynku na końcach odejmuje z prędkości PROSTĄ, więc
+        kasuje tylko dryf narastający równomiernie. Prawdziwy dryf błądzi
+        i po kilkunastu sekundach jego całka daje tor uciekający w jedną
+        stronę na dziesiątki metrów przy ruchu rzędu pół metra. Powyżej
+        ANCHOR_MAX_S wchodzi więc filtr, choćby końce stały.
+        """
+        tresc, n, _ = uderzenie_csv(seconds=0.8, margines=12.0)
+        prep = motion3d.prepare(self.zapisz("dlugie.csv", tresc))
+        wynik = motion3d.build_motion(prep, 0, n - 1)
+
+        pozycje = np.array(wynik["payload"]["pos"])
+        przesuniecie = float(np.linalg.norm(pozycje[-1] - pozycje[0]))
+        meta = wynik["meta"]
+
+        # Tor uciekający w linii prostej ma przesunięcie równe drodze.
+        # Ruch, który gdzieś dochodzi i zostaje, ma je znacznie mniejsze.
+        self.assertLess(przesuniecie, 0.5 * meta["path_cm"])
+        self.assertNotIn("spoczynku", meta["label"])
+
+        # I druga połowa tej samej sprawy: dryf ma być WIDOCZNY w liczbach,
+        # nie tylko usunięty. Gałąź z kotwicą mierzyła wcześniej odjętą
+        # rampę PRĘDKOŚCI i raportowała 1 cm przy torze uciekającym na
+        # 97 metrów — liczba pilnująca wiarygodności milczała dokładnie
+        # wtedy, gdy była potrzebna.
+        self.assertGreater(meta["drift_cm"], 0.0)
+        self.assertGreaterEqual(meta["drift_ratio"], 0.0)
+
+    def test_filtr_nie_tnie_ruchu_tam_i_z_powrotem(self):
+        """Filtr dryfu nie ma prawa zjadać ruchu, który mierzymy.
+
+        Odtwarzamy sytuację z prowadnicy: jazda tam i z powrotem o okresie
+        ok. 3 s, czyli w paśmie, w którym filtr dryfu jeszcze działa.
+        Przy zbyt wysokim progu filtr ścinał amplitudę o połowę i DZIELIŁ
+        pojedynczy przejazd na kilka — na ekranie wyglądało to jak
+        zatrzymanie i zawrócenie w środku płynnego ruchu.
+
+        Sprawdzamy jedno i drugie: amplitudę oraz liczbę punktów zwrotnych,
+        której znamy prawdziwą wartość, bo sami zadaliśmy ruch.
+        """
+        fs, okres, amplituda_m = 100.0, 3.0, 0.30
+        czas_s = okres * 4
+        n = int(fs * czas_s)
+        t = np.arange(n) / fs
+
+        omega = 2 * np.pi / okres
+        polozenie = amplituda_m * np.sin(omega * t)
+        przyspieszenie = -amplituda_m * omega ** 2 * np.sin(omega * t)
+
+        kolumny = {
+            "accx": przyspieszenie, "accy": np.zeros(n), "accz": np.full(n, 9.80665),
+            "gyrx": np.zeros(n), "gyry": np.zeros(n), "gyrz": np.zeros(n),
+            "timestamp": np.full(n, 1000.0 / fs),
+            "linaccx": przyspieszenie, "linaccy": np.zeros(n), "linaccz": np.zeros(n),
+            "rotx": np.zeros(n), "roty": np.zeros(n), "rotz": np.zeros(n),
+        }
+        wiersze = np.column_stack(list(kolumny.values()))
+        tresc = (",".join(kolumny) + "\n" +
+                 "\n".join(",".join(f"{v:.17g}" for v in w) for w in wiersze) + "\n")
+
+        prep = motion3d.prepare(self.zapisz("prowadnica.csv", tresc))
+        pozycje = np.array(
+            motion3d.build_motion(prep, 0, n - 1)["payload"]["pos"])
+
+        wzdluz = pozycje[:, 0]
+        rozpietosc = float(wzdluz.max() - wzdluz.min())
+        prawda_cm = 2 * amplituda_m * 100
+
+        # Filtr wolno, żeby trochę uszczknął, ale nie połowę.
+        self.assertGreater(rozpietosc, 0.75 * prawda_cm,
+                           "filtr dryfu zjada mierzony ruch")
+
+        # Zadany ruch ma dokładnie jeden punkt zwrotny na pół okresu.
+        # Więcej znaczy, że filtr pociął przejazd na kawałki.
+        pochodna = np.gradient(wzdluz)
+        zwroty = np.where(np.diff(np.sign(pochodna)) != 0)[0]
+        odlegle = [i for k, i in enumerate(zwroty)
+                   if k == 0 or (i - zwroty[k - 1]) > 0.3 * fs]
+
+        self.assertLessEqual(len(odlegle), 2 * int(czas_s / okres) + 2,
+                             "filtr dorobił punkty zwrotne, których nie było")
+
+    def test_droga_nie_rosnie_od_zapasu_spoczynku(self):
+        """Zapas nieruchomych próbek po bokach nie ma prawa wydłużyć toru.
+
+        Filtr na POZYCJI dorysowywał tu zawracanie: przy 1.5 s zapasu
+        z każdej strony droga wychodziła 101 cm zamiast 60.
+        """
+        krotki, droga_cm = self._rekonstrukcja("krotki.csv", margines=0.3)
+        dlugi, _ = self._rekonstrukcja("dlugi.csv", margines=1.5)
+
+        self.assertAlmostEqual(krotki["path_cm"], droga_cm, delta=1.0)
+        self.assertAlmostEqual(dlugi["path_cm"], droga_cm, delta=1.0)
+
+
+class WatchGeometryTests(TestCase):
+    """Koperta zegarka ma PRAWDZIWY rozmiar, nie ułamek rozpiętości ruchu.
+
+    O to chodzi w całej scenie: skoro tor jest w centymetrach, to zegarek
+    też, i dopiero wtedy z obrazu widać, ile razy zamach był większy od
+    urządzenia. Wcześniej bryła rosła razem z ruchem, więc każde nagranie
+    wyglądało tak samo.
+    """
+
+    @staticmethod
+    def _tor(rozpietosc_cm):
+        pozycje = np.zeros((50, 3))
+        pozycje[:, 0] = np.linspace(0.0, rozpietosc_cm, 50)
+        return pozycje
+
+    @staticmethod
+    def _wymiary(geometry):
+        wierzcholki = np.array(geometry.vertices)
+        return tuple(float(wierzcholki[:, os].max() - wierzcholki[:, os].min())
+                     for os in range(3))
+
+    def _koperta(self, rozpietosc_cm, watch_scale=1.0):
+        bounds = scene.SceneBounds.around(self._tor(rozpietosc_cm), watch_scale)
+        return self._wymiary(scene.WatchGeometry.of(bounds.watch_scale)), bounds
+
+    def test_rozmiar_nie_zalezy_od_rozpietosci_ruchu(self):
+        drobny, _ = self._koperta(0.5)
+        szeroki, _ = self._koperta(80.0)
+
+        self.assertEqual(drobny, szeroki)
+        for wymiar, oczekiwany in zip(drobny, motion3d_constants.WATCH_SIZE_CM):
+            self.assertAlmostEqual(wymiar, oczekiwany, places=6)
+
+    def test_udzial_w_scenie_maleje_przy_wiekszym_ruchu(self):
+        """Sedno proporcji: ta sama koperta na większej scenie zajmuje mniej."""
+        drobny, bounds_drobny = self._koperta(2.0)
+        szeroki, bounds_szeroki = self._koperta(60.0)
+
+        self.assertGreater(max(drobny) / bounds_drobny.side,
+                           3 * max(szeroki) / bounds_szeroki.side)
+
+    def test_reczne_powiekszenie_skaluje_wszystkie_boki_rowno(self):
+        pojedyncza, _ = self._koperta(10.0)
+        potrojna, _ = self._koperta(10.0, watch_scale=3.0)
+
+        for jeden, trzy in zip(pojedyncza, potrojna):
+            self.assertAlmostEqual(trzy, 3 * jeden, places=6)
+
+    def test_kadr_miesci_koperte_takze_przy_ruchu_zerowym(self):
+        koperta, bounds = self._koperta(0.0)
+        self.assertGreater(bounds.side, max(koperta))
+
+
+class WatchMeshTests(TestCase):
+    """Siatka okrągłej koperty — sprawdzona ZANIM zobaczy ją Plotly.
+
+    Mesh3d nie protestuje przeciwko niczemu: dziurawa bryła po prostu
+    prześwituje, a odwrotnie nawinięty trójkąt zostaje czarny przy
+    `flatshading`. Jedno i drugie widać dopiero na ekranie i wygląda jak
+    usterka animacji, nie jak błąd w geometrii — dlatego jest tu.
+    """
+
+    def setUp(self):
+        self.geometry = scene.WatchGeometry.of(1.0)
+        self.vertices = np.array(self.geometry.vertices)
+        self.faces = np.array(self.geometry.faces)
+        self.segments = motion3d_constants.WATCH_SEGMENTS
+
+    def _edges(self):
+        for a, b, c in self.faces:
+            yield from ((a, b), (b, c), (c, a))
+
+    def test_kolor_na_kazdy_trojkat(self):
+        self.assertEqual(len(self.geometry.colors), len(self.faces))
+        self.assertEqual(len(self.faces), 4 * self.segments)
+        self.assertEqual(len(self.vertices), 2 + 2 * self.segments)
+
+    def test_indeksy_wskazuja_istniejace_wierzcholki(self):
+        self.assertGreaterEqual(self.faces.min(), 0)
+        self.assertLess(self.faces.max(), len(self.vertices))
+        for face in self.faces:
+            self.assertEqual(len(set(face)), 3, "trójkąt zdegenerowany")
+
+    def test_bryla_jest_zamknieta(self):
+        """Każda krawędź należy do dokładnie dwóch trójkątów — inaczej
+        w bryle jest dziura albo zostaje szczelina na zamknięciu okręgu."""
+        licznik = Counter(tuple(sorted(edge)) for edge in self._edges())
+        self.assertEqual(set(licznik.values()), {2})
+
+    def test_nawiniecie_jest_spojne(self):
+        """Każda krawędź przebiegana raz w jedną, raz w drugą stronę."""
+        skierowane = Counter(self._edges())
+        for (start, end), ile in skierowane.items():
+            self.assertEqual(ile, 1)
+            self.assertEqual(skierowane[(end, start)], 1)
+
+    def test_normalne_wychodza_na_zewnatrz(self):
+        """Bez tego Plotly oświetla ścianę od środka i zostaje ona czarna."""
+        for a, b, c in self.faces:
+            normalna = np.cross(self.vertices[b] - self.vertices[a],
+                                self.vertices[c] - self.vertices[a])
+            # Środek bryły jest w zerze, więc centroid ściany wskazuje
+            # kierunek „na zewnątrz" dla tej ściany.
+            centroid = (self.vertices[a] + self.vertices[b] + self.vertices[c]) / 3.0
+            self.assertGreater(float(np.dot(normalna, centroid)), 0.0)
+
+    def test_obwod_lezy_na_okregu(self):
+        obwod = self.vertices[2:]
+        promienie = np.hypot(obwod[:, 0], obwod[:, 1])
+        self.assertTrue(np.allclose(
+            promienie, motion3d_constants.WATCH_DIAMETER_CM / 2.0))
+        self.assertTrue(np.allclose(
+            np.abs(self.vertices[:, 2]),
+            motion3d_constants.WATCH_THICKNESS_CM / 2.0))
+
+    def test_promien_zgadza_sie_z_najdalszym_punktem(self):
+        """WATCH_RADIUS_CM wyznacza margines kadru — gdyby był za mały,
+        koperta wystawałaby poza ścianę sceny i Plotly by ją przyciął."""
+        self.assertAlmostEqual(float(np.linalg.norm(self.vertices, axis=1).max()),
+                               motion3d_constants.WATCH_RADIUS_CM, places=9)
+
+    def test_znacznik_jest_ciagly_i_wysrodkowany_na_y(self):
+        """Bez znacznika obrót walca wokół własnej tarczy jest niewidoczny."""
+        oznaczone = [wedge for wedge in range(self.segments)
+                     if scene.WatchGeometry._is_marked(wedge, self.segments)]
+
+        self.assertTrue(oznaczone)
+        self.assertEqual(oznaczone, list(range(oznaczone[0], oznaczone[-1] + 1)),
+                         "znacznik rozpadł się na kawałki")
+
+        katy = [360.0 * (wedge + 0.5) / self.segments for wedge in oznaczone]
+        self.assertAlmostEqual(float(np.mean(katy)), 90.0, places=6)
+        self.assertLessEqual(max(katy) - min(katy),
+                             motion3d_constants.WATCH_MARK_DEGREES)
+
+
 class Motion3DRekonstrukcjaTests(BaseDataTest):
 
     def zapisz(self, nazwa, tresc=None):
@@ -187,6 +512,47 @@ class Motion3DRekonstrukcjaTests(BaseDataTest):
         self.assertAlmostEqual(meta["path_cm"], 4 * AMPL * 100, delta=6.0)
         self.assertAlmostEqual(meta["v_max"], 2 * np.pi * FREQ * AMPL, delta=0.12)
 
+    def test_odtwarza_os_ruchu_a_nie_tylko_jego_dlugosc(self):
+        """Ruch jest zadany WZDŁUŻ X ŚWIATA — i tam ma wyjść.
+
+        Sama droga może się zgadzać przy torze wygiętym w dowolną stronę,
+        więc bez tego testu „48 cm” nie znaczy, że narysowano ten ruch,
+        który zmierzono. Poprzedni model (sztywna dźwignia) wykładał się
+        dokładnie tutaj: wymuszał łuk na sferze, więc rozrzucał ruch na
+        wszystkie trzy osie niezależnie od tego, co pokazał czujnik.
+        """
+        prep = motion3d.prepare(self.zapisz("osie.csv"))
+        okres = int(FS_IMU / FREQ)
+        lo = int(FS_IMU * 3)
+
+        pozycje = np.array(
+            motion3d.build_motion(prep, lo, lo + okres)["payload"]["pos"])
+        rozrzut = pozycje.max(axis=0) - pozycje.min(axis=0)      # [cm]
+
+        # Ruch tam i z powrotem o amplitudzie AMPL => rozpiętość 2 * AMPL.
+        self.assertAlmostEqual(rozrzut[0], 2 * AMPL * 100, delta=2.0)
+
+        # Poprzeczne osie mają zostać puste. Próg jest ułamkiem ruchu
+        # głównego, a nie liczbą bezwzględną — inaczej test przechodziłby
+        # sam z siebie, gdyby rekonstrukcja przestała cokolwiek rysować.
+        self.assertLess(max(rozrzut[1], rozrzut[2]), 0.10 * rozrzut[0])
+
+    def test_tor_nie_jest_uwieziony_na_sferze(self):
+        """Nadgarstek musi móc zmieniać odległość od środka ruchu.
+
+        Model dźwigni trzymał tor na sferze o stałym promieniu co do
+        ostatniej cyfry — po tym najłatwiej poznać, że wrócił.
+        """
+        prep = motion3d.prepare(self.zapisz("sfera.csv"))
+        okres = int(FS_IMU / FREQ)
+        lo = int(FS_IMU * 3)
+
+        pozycje = np.array(
+            motion3d.build_motion(prep, lo, lo + okres)["payload"]["pos"])
+        promien = np.linalg.norm(pozycje - pozycje.mean(axis=0), axis=1)
+
+        self.assertGreater(promien.max() - promien.min(), 0.5 * promien.max())
+
     def test_scena_ma_komplet_sladow_i_klatek(self):
         prep = motion3d.prepare(self.zapisz("scena.csv"))
         wynik = motion3d.build_motion(prep, 1200, 2400)
@@ -196,7 +562,9 @@ class Motion3DRekonstrukcjaTests(BaseDataTest):
         self.assertEqual(len(wynik["figure"]["data"]), 9)
         self.assertEqual(len(wynik["payload"]["pos"]), wynik["meta"]["frames"])
         self.assertEqual(len(wynik["payload"]["t"]), wynik["meta"]["frames"])
-        self.assertEqual(len(wynik["payload"]["verts"]), 8)  # bryła zegarka
+        # Bryła zegarka: dwa środki krążków + dwa obwody
+        self.assertEqual(len(wynik["payload"]["verts"]),
+                         2 + 2 * motion3d_constants.WATCH_SEGMENTS)
 
         # Indeksy śladów animowanych są kontraktem z motion3d.js
         dyn = wynik["payload"]["dynamic"]

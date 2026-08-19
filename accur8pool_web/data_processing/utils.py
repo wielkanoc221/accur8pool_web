@@ -162,7 +162,24 @@ def get_df_from_csv(path):
 
 
 def lowpass_filter(data, cutoff=8, fs=100):
-    b, a = butter(2, cutoff / (fs / 2), btype='low')
+    """Filtr dolnoprzepustowy. Zwraca dane NIETKNIĘTE, gdy granica leży
+    powyżej Nyquista tego zapisu.
+
+    butter() wymaga 0 < cutoff/(fs/2) < 1 i przy złamaniu tego warunku
+    rzuca wyjątkiem, który wychodził aż do przeglądarki jako odmowa
+    przyjęcia pliku (422). A powyżej Nyquista filtr i tak nie ma czego
+    uciąć — przepuszczenie danych bez zmian jest właściwą odpowiedzią,
+    nie awarią.
+    """
+    nyquist = fs / 2.0
+    if not np.isfinite(nyquist) or nyquist <= 0:
+        return np.asarray(data, dtype=float)
+
+    normalized = cutoff / nyquist
+    if not np.isfinite(normalized) or normalized >= 1.0 or normalized <= 0:
+        return np.asarray(data, dtype=float)
+
+    b, a = butter(2, normalized, btype='low')
     return filtfilt(b, a, data, axis=0)
 
 

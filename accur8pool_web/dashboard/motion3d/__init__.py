@@ -18,7 +18,7 @@ Reszta modułów to warstwy, na które rozpada się ta ostatnia funkcja:
     time_axis.py    rozpoznanie osi czasu (patrz punkt 1 niżej)
     quaternions.py  kwaterniony i całkowanie żyroskopu
     orientation.py  wybór źródła orientacji i kontrola jego jakości
-    lever_arm.py    pozycja z modelu sztywnej dźwigni
+    trajectory.py   pozycja z podwójnego całkowania przyspieszenia
     frames.py       które próbki trafiają na klatki
     scene.py        kadr, bryła zegarka, fazy, figura Plotly
     builder.py      kolejność powyższych i kształt odpowiedzi
@@ -28,25 +28,38 @@ SKĄD BIERZE SIĘ RUCH
 Zegarek mierzy DWIE rzeczy naprawdę: orientację (rotation vector albo
 żyroskop) i przyspieszenie. Pozycji nie mierzy nikt.
 
-Poprzednia wersja robiła pozycję z DWUKROTNEGO CAŁKOWANIA przyspieszenia
-i cała reszta modułu była walką ze skutkami tej decyzji: filtry
-górnoprzepustowe, wykrywanie bezruchu, progi dobierane z kwantyli,
-zerowanie prędkości (ZUPT). Nie da się tego wygrać na odcinku jednego
-uderzenia. Błąd orientacji rzędu 0.3° zostawia w przyspieszeniu stałą
-0.05 m/s², a to po dwóch sekundach 10 cm odpłynięcia — więc tor uderzenia
-wychodził spiralą. Filtr, który by to skasował, musi mieć częstotliwość
-graniczną rzędu 0.3 Hz, czyli akurat tam, gdzie leży samo uderzenie:
-lekarstwo zjadało pacjenta. Stąd animacja, która „słabo wygląda”.
+Pozycja bierze się z PODWÓJNEGO CAŁKOWANIA przyspieszenia obróconego do
+układu świata, z filtrem górnoprzepustowym po każdym całkowaniu.
+Wyprowadzenie i parametry: trajectory.py.
 
-Tutaj pozycja bierze się z KINEMATYKI, a nie z całkowania — uderzenie jest
-ruchem wahadłowym wokół nieruchomego łokcia, więc wystarczy jedna trójka
-liczb na cały segment zamiast trajektorii w każdej próbce. Wyprowadzenie
-i cena tego założenia: lever_arm.py.
+TA DECYZJA BYŁA ODWRACANA DWA RAZY — warto wiedzieć, dlaczego,
+zanim ktoś odwróci ją po raz trzeci.
 
-Za to model NIE POKAŻE czystego przesunięcia bez obrotu — takiego ruchu
-nie ma z czego odtworzyć. Jakość dopasowania (ile procent zmierzonego
-przyspieszenia tłumaczy dźwignia) wraca w `meta.lever_fit` i interfejs ma
-ją pokazać, żeby dało się odróżnić rekonstrukcję od zgadywanki.
+Całkowanie było tu pierwsze i zostało zastąpione modelem sztywnej
+dźwigni (p = R·d, jedna trójka liczb na segment). Powód zapisany wtedy
+w tym pliku: błąd orientacji rzędu 0.3° zostawia w przyspieszeniu stałą
+0.05 m/s², a to po dwóch sekundach 10 cm odpłynięcia, więc tor uderzenia
+wychodził spiralą; filtr, który by to skasował, musi mieć próg rzędu
+0.3 Hz, czyli tam, gdzie leży samo uderzenie.
+
+Model dźwigni okazał się jednak gorszy z innego powodu, i to mierzalnego:
+na nagraniach demo tłumaczył 24–31% zmierzonego przyspieszenia, a resztę
+odrzucał. Wymuszał przy tym tor na sferze o STAŁYM promieniu — nadgarstek
+nie mógł się w tej animacji przybliżyć ani oddalić od punktu obrotu,
+cokolwiek zmierzył czujnik. Ruch, który w rzeczywistości jest obrotem
+PLUS przesunięciem, oglądało się jako sam obrót wygięty na łuk.
+
+Wybrano więc całkowanie ze świadomością jego ceny. Cena nie zniknęła:
+dryf nadal rośnie z kwadratem czasu i nadal trzeba go odcinać filtrem
+blisko pasma sygnału. Różnica jest taka, że teraz WIDAĆ, ile go odcięto —
+`meta.drift_cm` i `meta.drift_ratio` mówią, jaka część kształtu jest
+dziełem filtru, a nie pomiaru, i interfejs ma to pokazywać. Model
+dźwigni odrzucał trzy czwarte sygnału bez śladu w obrazie.
+
+Wniosek praktyczny: im KRÓTSZY zaznaczony segment, tym wierniejszy tor.
+Na jednym uderzeniu całkowanie jest w swoim żywiole; na kilkunastu
+sekundach nagrania narysuje wiarygodnie wyglądającą pętlę, która jest
+czystym odpłynięciem.
 
 CO JESZCZE JEST TRUDNE W TYCH DANYCH
 ------------------------------------

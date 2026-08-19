@@ -14,6 +14,82 @@ from .utils import (
 )
 
 
+# Tempo zapisu użyte, gdy z osi czasu nic sensownego nie da się odczytać.
+# Ta sama wartość, która wcześniej była zaszyta w lowpass_filter na sztywno
+# dla WSZYSTKICH plików — teraz jest ostatecznością, a nie regułą.
+FALLBACK_SAMPLING_RATE = 100.0
+
+# Sensowny odstęp próbkowania w sekundach — po nim rozpoznajemy jednostkę
+# kolumny czasu. Jednostki w kolejności prób.
+DT_MIN, DT_MAX = 1e-4, 1.0
+TIME_SCALES = (("s", 1.0), ("ms", 1e-3), ("us", 1e-6), ("ns", 1e-9))
+
+
+def _scale_for(step: float):
+    """Przelicznik na sekundy, przy którym `step` jest sensownym odstępem."""
+    if not np.isfinite(step) or step <= 0:
+        return None
+    for _, scale in TIME_SCALES:
+        if DT_MIN <= step * scale <= DT_MAX:
+            return scale
+    return None
+
+
+def _steps_seconds(values) -> np.ndarray | None:
+    """Odstępy między próbkami [s] z kolumny czasu DOWOLNEGO rodzaju.
+
+    Kolumna `timestamp` znaczy w każdym pokoleniu pliku co innego i widać
+    to w katalogu z nagraniami:
+
+        bezwzględne nanosekundy   79635264328416, 79635274657416, ...
+        odstęp w milisekundach    15378.04, 9.14, 10.67, ...
+        odstęp w sekundach        0.0, 0.01096, 0.00968, ...
+
+    a kolumna `csv_version` NIE rozstrzyga, która to — pliki z jedynką
+    mają i jedno, i drugie. Rozpoznajemy więc tak samo jak
+    motion3d/time_axis.py: rodzaj po monotoniczności, jednostkę po
+    typowej wielkości kroku.
+
+    Zwraca None, gdy żadna interpretacja nie daje sensownego odstępu —
+    wołający bierze wtedy FALLBACK_SAMPLING_RATE.
+    """
+    values = np.asarray(values, dtype=float)
+    values = values[np.isfinite(values)]
+    if values.size < 3:
+        return None
+
+    diffs = np.diff(values)
+
+    # Rosnąca monotonicznie → czas bezwzględny, odstęp to różnica.
+    if float(np.mean(diffs > 0)) > 0.95:
+        scale = _scale_for(float(np.median(diffs)))
+        if scale is not None:
+            return diffs * scale
+
+    # Inaczej → kolumna JEST odstępem. Pierwszy wiersz bywa czasem od
+    # startu urządzenia (widziane 15378 ms przy próbkowaniu 10 ms), więc
+    # go pomijamy.
+    scale = _scale_for(float(np.median(np.abs(values[1:]))))
+    if scale is not None:
+        return np.abs(values[1:]) * scale
+
+    return None
+
+
+def _rate_from_steps(steps) -> float:
+    """Hz z odstępów między próbkami [s], odporne na przerwy i zera."""
+    if steps is None:
+        return FALLBACK_SAMPLING_RATE
+
+    steps = np.asarray(steps, dtype=float)
+    steps = steps[np.isfinite(steps) & (steps > 0)]
+    if steps.size == 0:
+        return FALLBACK_SAMPLING_RATE
+
+    median = float(np.median(steps))
+    return 1.0 / median if median > 0 else FALLBACK_SAMPLING_RATE
+
+
 class DataFrameTransformerBase:
     def __init__(self, data: DataFrame, copy: bool = True):
         self.data = data.copy() if copy else data
@@ -64,9 +140,35 @@ class DataFrameTransformerBase:
         )
         return self
 
+    def sampling_rate(self) -> float:
+        """Tempo zapisu w Hz, odczytane z osi czasu TEGO pliku.
+
+        Potrzebne filtrowi: granica przepuszczania podaje się w ułamku
+        częstotliwości Nyquista, więc przy zaszytym na sztywno fs = 100 Hz
+        deklarowane 5 Hz wychodziło na zapisie 400 Hz w rzeczywistości
+        20 Hz — filtr zostawiał czterokrotnie więcej wysokich
+        częstotliwości, niż obiecywał, i to bez żadnego sygnału.
+
+        Mediana, nie średnia: pojedyncza przerwa w nagraniu (uśpiony
+        czujnik) potrafi być tysiąc razy dłuższa od zwykłego odstępu
+        i zaniżyłaby średnią o rzędy wielkości.
+        """
+        kolumna = TIME if TIME in self.data.columns else TIMESTAMP
+        return _rate_from_steps(_steps_seconds(self.data[kolumna].to_numpy()))
+
     def lowpass(self, columns: Sequence[str], cutoff: float) -> "DataFrameTransformerBase":
+        """Filtr dolnoprzepustowy na tych kolumnach, KTÓRE PLIK MA.
+
+        Listy wołających opisują komplet czujników, ale zapis bez
+        magnetometru albo bez linacc* jest normalny i ma się przygotować
+        tak samo. Wcześniej kończyło się to KeyError-em w środku
+        transformacji, czyli odmową przyjęcia poprawnego pliku.
+        """
+        rate = self.sampling_rate()
         for col in columns:
-            self.data[col] = lowpass_filter(self.data[col], cutoff=cutoff)
+            if col not in self.data.columns:
+                continue
+            self.data[col] = lowpass_filter(self.data[col], cutoff=cutoff, fs=rate)
         return self
 
     def add_magnitude(
@@ -137,6 +239,11 @@ class DataFrameTransformerBase:
 class DataFrameTransformerV2(DataFrameTransformerBase):
     def __init__(self, data: DataFrame, copy: bool = True):
         super().__init__(data, copy)
+
+    # sampling_rate() NIE jest tu nadpisywane: _steps_seconds rozpoznaje
+    # rodzaj kolumny czasu sam, a pliki z csv_version = 1 mają i znaczniki
+    # bezwzględne, i odstępy — więc wersja formatu i tak by tego nie
+    # rozstrzygnęła.
 
     def add_time(self, dt_col: str = TIMESTAMP, time_col: str = TIME) -> "DataFrameTransformerBase":
         dt_ns = self.data[TIMESTAMP].diff()

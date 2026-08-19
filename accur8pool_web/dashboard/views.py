@@ -28,7 +28,7 @@ from django.conf import settings
 from django.contrib.auth import logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.mixins import LoginRequiredMixin
-from django.http import HttpResponseBadRequest, JsonResponse
+from django.http import FileResponse, HttpResponseBadRequest, JsonResponse
 from django.shortcuts import redirect, render
 from django.views import View
 from django.views.decorators.csrf import ensure_csrf_cookie
@@ -45,7 +45,12 @@ from .segments import (
     trim_phases_to_segment,
 )
 from .series import TARGET_BUCKETS, Series
-from .storage import DatasetStorage, dataset_meta
+from .storage import (
+    DatasetStorage,
+    dataset_meta,
+    download_meta,
+    download_name,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -154,6 +159,13 @@ def _dashboard_page(request, dataset=None, graph_data=None, columns_count=None,
 @ensure_csrf_cookie
 def datasets_view(request):
     return render(request, "datasets.html")
+
+
+@login_required
+@ensure_csrf_cookie
+def downloads_view(request):
+    """Strona „Pobieranie” — pliki użytkownika do zabrania z serwera."""
+    return render(request, "downloads.html")
 
 
 # ============================================================
@@ -316,6 +328,62 @@ class DatasetUploadView(ApiView):
             uploaded.seek(0)
 
         return "Plik CSV nie zawiera danych." if preview.empty else None
+
+
+# ============================================================
+#  POBIERANIE PLIKÓW
+#
+#  Wyjątek od zasady „aplikacja czyta wyłącznie prepared_data”: tutaj
+#  wydajemy OBA drzewa. Wersja surowa to dokładnie ten plik, który
+#  użytkownik przysłał, i tylko z niej da się przygotowanie powtórzyć
+#  w innym narzędziu.
+# ============================================================
+
+class DownloadListView(ApiView):
+    """Zestawy wraz z informacją, które warianty leżą na dysku.
+
+    Osobny endpoint od DatasetListView, bo pyta o co innego: tamten
+    odpowiada „co da się otworzyć” (a więc pomija zestawy bez wersji
+    przygotowanej), a ten „co da się zabrać”. Doklejenie wariantów do
+    listy zestawów kosztowałoby dwa stat() na plik przy każdym otwarciu
+    sidebaru, który tej informacji nie używa.
+    """
+
+    def get(self, request):
+        storage = storage_for(request.user)
+        data = [download_meta(storage, dataset) for dataset in storage.owned()]
+        return JsonResponse(data, safe=False)
+
+
+class DatasetDownloadView(ApiView):
+    """Wydaje JEDEN wariant pliku (?kind=raw|prepared) jako załącznik.
+
+    Nazwa z URL-a nie buduje ścieżki — najpierw musi się znaleźć wśród
+    zestawów TEGO użytkownika, tak samo jak w DatasetStorage.resolve.
+    Zestaw cudzy i nazwa spoza bazy kończą się tym samym 404.
+    """
+
+    def get(self, request, filename, kind):
+        storage = storage_for(request.user)
+
+        dataset = storage.owned().filter(filename=filename).first()
+        if dataset is None:
+            return self.error("Nie znaleziono pliku.", 404)
+
+        path = storage.download_path(dataset, kind)
+        if path is None:
+            return self.error("Ta wersja pliku nie jest dostępna.", 404)
+
+        try:
+            handle = open(path, "rb")
+        except OSError:
+            logger.exception("Nie udało się otworzyć pliku do pobrania: %s", path)
+            return self.error("Nie udało się odczytać pliku.", 500)
+
+        # FileResponse zamyka uchwyt sam, po wysłaniu ostatniego kawałka —
+        # plik może mieć 300 MB, więc nie wchodzi do pamięci naraz.
+        return FileResponse(handle, as_attachment=True,
+                            filename=download_name(dataset.filename, kind))
 
 
 class DatasetRangeView(DatasetApiView):

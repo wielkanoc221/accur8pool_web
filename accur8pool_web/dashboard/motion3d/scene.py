@@ -9,6 +9,7 @@ szukać po nazwie — to jest kontrakt między tym plikiem a motion3d.js.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import numpy as np
@@ -16,13 +17,16 @@ import numpy as np
 from .constants import (
     AXIS_FRACTION,
     MAX_PHASE_GAP,
-    MIN_SPAN_CM,
     NEUTRAL_COLOR,
     PLOT_FONT,
     WATCH_BOTTOM,
-    WATCH_FRACTION,
-    WATCH_RADIUS,
+    WATCH_DIAMETER_CM,
+    WATCH_LENGTH_CM,
+    WATCH_MARK_DEGREES,
+    WATCH_RADIUS_CM,
+    WATCH_SEGMENTS,
     WATCH_SIDE,
+    WATCH_THICKNESS_CM,
     WATCH_TOP,
 )
 
@@ -44,7 +48,7 @@ class SceneBounds:
 
     center: np.ndarray
     side: float
-    watch_size: float
+    watch_scale: float
     axis_length: float
 
     @classmethod
@@ -52,20 +56,23 @@ class SceneBounds:
         center = (positions_cm.max(axis=0) + positions_cm.min(axis=0)) / 2.0
         spread = float((positions_cm.max(axis=0) - positions_cm.min(axis=0)).max())
 
-        # Bryła zegarka skaluje się do ruchu, ale nie w dół bez końca:
-        # MIN_SPAN_CM jest podłogą ODNIESIENIA, żeby przy drobnym ruchu
-        # (albo przy samym obrocie w miejscu) zegarek nie skurczył się razem
-        # z nim do niewidocznego punktu.
-        watch_size = max(spread, MIN_SPAN_CM) * WATCH_FRACTION * float(watch_scale)
-        axis_length = watch_size * AXIS_FRACTION
-        margin = max(axis_length, watch_size * WATCH_RADIUS) * 1.08
+        # Koperta NIE skaluje się do ruchu — ma stały rozmiar w centymetrach
+        # (WATCH_SIZE_CM), bo tyle mierzy prawdziwy zegarek. `watch_scale`
+        # jest wyłącznie ręcznym powiększeniem z ?watch=, na wypadek gdyby
+        # przy bardzo szerokim zamachu bryła zrobiła się za mała, by dostrzec
+        # jej obrót. Przy 1.0 proporcja zegarka do toru jest prawdziwa.
+        scale = float(watch_scale)
+        axis_length = WATCH_LENGTH_CM * scale * AXIS_FRACTION
+        margin = max(axis_length, WATCH_RADIUS_CM * scale) * 1.08
 
         # Bok wychodzi z samego ruchu i marginesu — bez własnej podłogi.
         # Podłoga na BOKU dawała odwrotny skutek niż zamierzony: przy ruchu
         # mniejszym od niej rozdmuchiwała kadr do stałego rozmiaru i to, co
         # miało być widoczne, malało do kilku pikseli pośrodku pustej sceny.
+        # Podłogi i tak już nie potrzeba: margines liczony od stałej koperty
+        # nigdy nie jest zerowy.
         return cls(center=center, side=spread + 2.0 * margin,
-                   watch_size=watch_size, axis_length=axis_length)
+                   watch_scale=scale, axis_length=axis_length)
 
     @property
     def ranges(self) -> dict:
@@ -86,34 +93,101 @@ class SceneBounds:
 class WatchGeometry:
     """Bryła zegarka w układzie URZĄDZENIA: wierzchołki, trójkąty, kolory.
 
-    Prostopadłościan o proporcjach koperty zegarka: szerszy w osi Y (wzdłuż
-    przedramienia), płaski w Z (od skóry w górę). Obracany jest
-    w przeglądarce, bo obrót ośmiu wierzchołków to nic, a przesłanie ich
-    dla każdej klatki byłoby kilkukrotnie większym JSON-em niż cała reszta.
+    Walec o wymiarach prawdziwej koperty: okrągła tarcza w płaszczyźnie XY,
+    grubość wzdłuż Z (od skóry w górę). Obracany jest w przeglądarce, bo
+    obrót kilkudziesięciu wierzchołków to nic, a przesłanie ich dla każdej
+    klatki byłoby wielokrotnie większym JSON-em niż cała reszta odpowiedzi.
+
+    Siatka: dwa krążki (tarcza i spód) rozpięte na wspólnych środkach plus
+    pas boku. Trójkąty są nawinięte tak, że normalne wychodzą NA ZEWNĄTRZ —
+    przy `flatshading` to od nich zależy, czy ściana jest oświetlona, czy
+    zostaje czarna.
     """
 
     vertices: list
     faces: list
     colors: list
 
+    # Numery dwóch wierzchołków środkowych; obwód zaczyna się za nimi.
+    _DIAL_CENTER = 0
+    _BACK_CENTER = 1
+    _RIM_START = 2
+
     @classmethod
-    def of(cls, size: float) -> "WatchGeometry":
-        """`size` jest w jednostkach sceny (centymetry)."""
-        hx, hy, hz = size * 0.45, size * 0.60, size * 0.16
-        vertices = [
-            (-hx, -hy, -hz), (hx, -hy, -hz), (hx, hy, -hz), (-hx, hy, -hz),
-            (-hx, -hy, hz), (hx, -hy, hz), (hx, hy, hz), (-hx, hy, hz),
-        ]
-        faces = [
-            (0, 1, 2), (0, 2, 3),      # spód
-            (4, 6, 5), (4, 7, 6),      # wierzch (tarcza)
-            (0, 5, 1), (0, 4, 5),      # bok -Y
-            (3, 2, 6), (3, 6, 7),      # bok +Y
-            (0, 3, 7), (0, 7, 4),      # bok -X
-            (1, 5, 6), (1, 6, 2),      # bok +X
-        ]
-        colors = [WATCH_BOTTOM] * 2 + [WATCH_TOP] * 2 + [WATCH_SIDE] * 8
+    def of(cls, scale: float = 1.0) -> "WatchGeometry":
+        """Koperta w centymetrach sceny, w skali `scale`.
+
+        Przy scale = 1.0 bryła ma wymiary prawdziwego zegarka, a tor ruchu
+        jest w tych samych centymetrach — proporcja na ekranie jest wtedy
+        rzeczywista. `scale` bierze się wyłącznie z ręcznego ?watch=.
+        """
+        radius = WATCH_DIAMETER_CM * scale / 2.0
+        half_thickness = WATCH_THICKNESS_CM * scale / 2.0
+        count = WATCH_SEGMENTS
+
+        vertices = [(0.0, 0.0, half_thickness), (0.0, 0.0, -half_thickness)]
+        vertices += [(radius * math.cos(angle), radius * math.sin(angle), height)
+                     for height in (half_thickness, -half_thickness)
+                     for angle in cls._angles(count)]
+
+        faces, colors = [], []
+        for wedge in range(count):
+            here, following = cls._rim(wedge, count), cls._rim(wedge + 1, count)
+            marked = cls._is_marked(wedge, count)
+
+            # Tarcza: środek → obwód, przeciwnie do wskazówek zegara
+            # patrząc z +Z, czyli normalna w górę.
+            faces.append((cls._DIAL_CENTER, here.dial, following.dial))
+            colors.append(WATCH_BOTTOM if marked else WATCH_TOP)
+
+            # Spód: kolejność odwrócona, więc normalna w dół.
+            faces.append((cls._BACK_CENTER, following.back, here.back))
+            colors.append(WATCH_BOTTOM)
+
+            # Bok: prostokąt między krążkami, pocięty na dwa trójkąty.
+            faces.append((here.dial, here.back, following.back))
+            faces.append((here.dial, following.back, following.dial))
+            side = WATCH_BOTTOM if marked else WATCH_SIDE
+            colors += [side, side]
+
         return cls(vertices=vertices, faces=faces, colors=colors)
+
+    # ------------------------------------------------------------
+    #  OBWÓD
+    # ------------------------------------------------------------
+
+    @staticmethod
+    def _angles(count: int):
+        """Kąty kolejnych wierzchołków obwodu, od osi +X."""
+        return [2.0 * math.pi * wedge / count for wedge in range(count)]
+
+    @classmethod
+    def _rim(cls, wedge: int, count: int) -> "_RimVertex":
+        """Para wierzchołków (tarcza, spód) na danym miejscu obwodu.
+
+        Modulo zamyka okrąg: wycinek ostatni sięga z powrotem do zerowego,
+        więc nie zostaje szczelina między początkiem a końcem pasa boku.
+        """
+        index = wedge % count
+        return _RimVertex(dial=cls._RIM_START + index,
+                          back=cls._RIM_START + count + index)
+
+    @staticmethod
+    def _is_marked(wedge: int, count: int) -> bool:
+        """Czy ten wycinek należy do znacznika „godziny 12" (kierunek +Y)."""
+        middle = 2.0 * math.pi * (wedge + 0.5) / count
+        # Różnica kątów sprowadzona do (-π, π], żeby znacznik nie rozpadł
+        # się na dwie połówki przy przejściu przez pełny obrót.
+        offset = (middle - math.pi / 2.0 + math.pi) % (2.0 * math.pi) - math.pi
+        return abs(offset) <= math.radians(WATCH_MARK_DEGREES) / 2.0
+
+
+@dataclass(frozen=True)
+class _RimVertex:
+    """Numery wierzchołków obwodu w jednym miejscu: od strony tarczy i spodu."""
+
+    dial: int
+    back: int
 
 
 # ============================================================
@@ -247,6 +321,19 @@ class FigureBuilder:
             "type": "scatter3d", "mode": "lines", "name": "ostatnia chwila",
             "x": [], "y": [], "z": [],
             "line": {"color": "#38bdf8", "width": 6},
+            "hoverinfo": "skip", "showlegend": False,
+        })
+
+        # Punkt nadgarstka — czoło ogona. Sama bryła zegarka tego nie
+        # zastępuje: przy obrocie widać ją raz z tarczy, raz z krawędzi,
+        # więc oko gubi, GDZIE dokładnie jest teraz nadgarstek na torze.
+        # Punkt jest zawsze tej samej wielkości i zawsze w tym samym
+        # miejscu względem toru.
+        self._dynamic["marker"] = self._add({
+            "type": "scatter3d", "mode": "markers", "name": "nadgarstek",
+            "x": [], "y": [], "z": [],
+            "marker": {"size": 4, "color": "#38bdf8",
+                       "line": {"color": "#0b1220", "width": 1}},
             "hoverinfo": "skip", "showlegend": False,
         })
 

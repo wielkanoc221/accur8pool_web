@@ -24,8 +24,11 @@ class WrongColumnsException(Exception):
 
 def transform_raw_df(df: DataFrame) -> pd.DataFrame:
     try:
-        COLUMNS_TO_FILTER_10_CUT_OFF = ['accx', 'accy', 'accz', 'linaccx', 'linaccy', 'linaccz', ]
-        COLUMNS_TO_FILTER_5_CUT_OFF = ['rotx', 'roty', 'rotz', 'gyrx', 'gyry', 'gyrz', 'magx', 'magy', 'magz']
+        # Listy kolumn są MODUŁOWE (patrz niżej), a nie lokalne. Wcześniej
+        # stały tutaj drugi raz i przesłaniały tamte: poprawka wyrzucająca
+        # rot* z filtrowania trafiła do stałej modułowej, ale wykonywała się
+        # kopia lokalna, która rot* nadal filtrowała. Dwie definicje tej
+        # samej rzeczy w jednym pliku to była cała przyczyna.
         if 'csv_version' in df.columns:
             transformer = DataFrameTransformerV2
 
@@ -90,6 +93,18 @@ REQUIRED_COLUMNS = (ACC_X, ACC_Y, ACC_Z, GYR_X, GYR_Y, GYR_Z, TIMESTAMP)
 COLUMNS_TO_FILTER_10_CUT_OFF = ["accx", "accy", "accz",
                                 "linaccx", "linaccy", "linaccz"]
 
+# rot* CELOWO NIE MA na tej liście i nie wolno go tu dopisać.
+#
+# rotx/roty/rotz to składowe kwaternionu, związane warunkiem |q| = 1.
+# Filtr puszczony po każdej składowej osobno nie wie o tym warunku i go
+# łamie: po przefiltrowaniu wektor przestaje opisywać obrót. Skutek widać
+# dopiero dwa moduły dalej — motion3d porównuje prędkość kątową z rotation
+# vectora z żyroskopem, wykrywa rozjazd i przechodzi na całkowanie samego
+# żyroskopu, które nie ma odniesienia kursu. Czyli: filtrowanie rot* psuje
+# animację 3D, a objawia się awaryjnym trybem w zupełnie innym miejscu.
+#
+# Wektor obrotu jest zresztą wyjściem fuzji czujników w zegarku i jest już
+# wygładzony — nie ma tu czego filtrować.
 COLUMNS_TO_FILTER_5_CUT_OFF = ["gyrx", "gyry", "gyrz", "magx", "magy", "magz"]
 
 def missing_required_columns(df: DataFrame) -> list[str]:
