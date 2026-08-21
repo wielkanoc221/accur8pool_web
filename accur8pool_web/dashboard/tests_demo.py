@@ -279,13 +279,27 @@ class DemoCommandTests(DemoTestCase):
 
 
 class StronaStartowaTests(TestCase):
-    """Goły adres serwisu prowadzi na dashboard; logowanie tylko wtedy, gdy
-    naprawdę go brakuje."""
+    """Goły adres serwisu to STRONA GŁÓWNA — opis projektu i instrukcja,
+    otwarte dla wszystkich.
+
+    Wcześniej stało tam przekierowanie na dashboard, więc pierwszym ekranem
+    aplikacji dla kogoś bez konta był formularz logowania. Te testy pilnują
+    nowego układu i tego, że nic z drogi do pracy się przy okazji nie
+    zepsuło: dashboard nadal prosi o logowanie, a po zalogowaniu użytkownik
+    ląduje dokładnie tam, dokąd szedł.
+    """
+
+    def test_gola_domena_to_strona_glowna_bez_logowania(self):
+        response = self.client.get("/")
+
+        # 200, a nie 302: żadnego skoku po drodze, także dla gościa.
+        self.assertEqual(response.status_code, 200)
+        self.assertTemplateUsed(response, "home.html")
 
     def test_niezalogowany_idzie_z_dashboardu_na_logowanie(self):
-        response = self.client.get("/", follow=True)
+        response = self.client.get(reverse("dashboard"), follow=True)
+
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.redirect_chain[0][0], reverse("dashboard"))
         self.assertIn(reverse("login"), response.redirect_chain[-1][0])
         self.assertTemplateUsed(response, "login.html")
 
@@ -293,19 +307,23 @@ class StronaStartowaTests(TestCase):
         User.objects.create_user("ala", password="tajne-haslo-123")
 
         response = self.client.post(
-            self.client.get("/", follow=True).redirect_chain[-1][0],
+            self.client.get(reverse("dashboard"), follow=True).redirect_chain[-1][0],
             {"username": "ala", "password": "tajne-haslo-123"}, follow=True)
 
         self.assertEqual(response.redirect_chain[-1][0], reverse("dashboard"))
         self.assertTemplateUsed(response, "dashboard.html")
 
-    def test_zalogowany_trafia_wprost_na_dashboard(self):
+    def test_zalogowany_oglada_strone_glowna_zamiast_przekierowania(self):
+        """Instrukcja obsługi jest potrzebna także po założeniu konta, więc
+        adres, pod którym leży, musi się otwierać również zalogowanemu."""
         user = User.objects.create_user("ola", password="tajne-haslo-123")
         self.client.force_login(user)
 
         response = self.client.get("/", follow=True)
-        self.assertEqual(response.redirect_chain, [(reverse("dashboard"), 302)])
-        self.assertTemplateUsed(response, "dashboard.html")
+
+        self.assertEqual(response.redirect_chain, [])
+        self.assertTemplateUsed(response, "home.html")
+        self.assertIn(reverse("dashboard"), response.content.decode())
 
     def test_zalogowany_nie_oglada_formularza_logowania(self):
         user = User.objects.create_user("ewa", password="tajne-haslo-123")

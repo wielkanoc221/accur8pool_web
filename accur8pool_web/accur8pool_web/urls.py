@@ -17,19 +17,22 @@ Including another URLconf
 
 from django.contrib import admin
 from django.urls import path, include
-from django.views.generic import RedirectView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
+
+    # Goła domena to STRONA GŁÓWNA — opis projektu, podgląd dashboardu
+    # i instrukcja obsługi, dostępne bez logowania.
+    #
+    # Wcześniej stało tu przekierowanie na dashboard. Dla kogoś, kto ma
+    # konto, było wygodne; dla każdego innego oznaczało, że pierwszym
+    # (i jedynym) ekranem aplikacji jest formularz logowania — bez słowa
+    # o tym, czym ta aplikacja jest i jakich danych oczekuje. Zalogowany
+    # nic na tym nie traci: przycisk „Otwórz dashboard” stoi w nagłówku
+    # strony głównej, a po samym zalogowaniu i tak ląduje na dashboardzie
+    # (LOGIN_REDIRECT_URL).
+    path("", include("home.urls")),
+
     path("", include("account.urls")),
     path('', include('dashboard.urls')),
-
-    # Wejście na gołą domenę prowadzi TAM, GDZIE SIĘ PRACUJE, czyli na
-    # dashboard. O logowanie prosi dopiero on sam (@login_required →
-    # LOGIN_URL), więc niezalogowany dostaje ekran logowania z ?next=
-    # i po zalogowaniu ląduje z powrotem tutaj. Odwrotna kolejność —
-    # najpierw logowanie, dashboard po nim — kazała zalogowanemu
-    # użytkownikowi przechodzić przez ekran, który nie ma mu nic do
-    # powiedzenia.
-    path('', RedirectView.as_view(pattern_name='dashboard'))
 ]

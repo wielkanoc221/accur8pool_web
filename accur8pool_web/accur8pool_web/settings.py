@@ -76,6 +76,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # 'home' jest PRZED 'dashboard', bo szablony szuka się w kolejności
+    # aplikacji: strona główna dołącza icons.html, który leży w dashboardzie,
+    # i nie ma własnej kopii tego pliku.
+    'home',
     'account',
     'dashboard'
 ]
