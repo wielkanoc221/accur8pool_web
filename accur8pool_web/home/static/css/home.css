@@ -259,9 +259,7 @@ pre.code code {
     place-items: center;
     width: 32px;
     height: 32px;
-    border-radius: 9px;
-    background: var(--bg-dark);
-    color: #7dd3fc;
+    flex-shrink: 0;
 }
 
 .site-nav {
@@ -443,17 +441,6 @@ pre.code code {
     color: var(--accent);
 }
 .section-lede { font-size: 16.5px; color: var(--text-secondary); }
-
-.block-title {
-    font-size: 1.25rem;
-    margin-bottom: 14px;
-}
-.block-title-spaced { margin-top: 56px; }
-.block-lede {
-    color: var(--text-secondary);
-    max-width: 74ch;
-    margin-bottom: 24px;
-}
 
 .grid { display: grid; gap: 20px; }
 .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -911,86 +898,6 @@ pre.code code {
 .phase-hit::before { background: var(--phase-hit); }
 .phase-follow::before { background: var(--phase-follow); }
 
-/* ============================================================
-   TABELE DANYCH I KARTY
-   ============================================================ */
-.split {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 300px;
-    gap: 28px;
-    align-items: start;
-}
-.split-main { min-width: 0; }
-.split-side { display: grid; gap: 18px; }
-
-.table-wrap {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    overflow-x: auto;
-}
-.data-table { width: 100%; border-collapse: collapse; font-size: 14.5px; }
-.data-table th, .data-table td {
-    padding: 13px 16px;
-    text-align: left;
-    vertical-align: top;
-    border-bottom: 1px solid var(--border);
-}
-.data-table thead th {
-    font-size: 11.5px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-muted);
-    background: var(--bg-subtle);
-    white-space: nowrap;
-}
-.data-table tbody tr:last-child th,
-.data-table tbody tr:last-child td { border-bottom: none; }
-.data-table tbody th { font-weight: 400; }
-.data-table tbody th code { margin-right: 3px; }
-.data-table td { color: var(--text-secondary); }
-
-.tag {
-    display: inline-block;
-    font-size: 11.5px;
-    font-weight: 700;
-    padding: 3px 9px;
-    border-radius: 999px;
-    background: var(--bg-sunken);
-    color: var(--text-muted);
-    white-space: nowrap;
-}
-.tag-req { background: var(--danger-bg); color: var(--danger); }
-.tag-rec { background: var(--accent-light); color: var(--accent-hover); }
-
-.note {
-    display: flex;
-    align-items: flex-start;
-    gap: 10px;
-    margin-top: 18px;
-    padding: 14px 16px;
-    border-radius: var(--radius-sm);
-    font-size: 14px;
-    border: 1px solid var(--border);
-    background: var(--bg-card);
-    color: var(--text-secondary);
-}
-.note .icon { margin-top: 3px; flex-shrink: 0; }
-.note-warn {
-    background: var(--warn-bg);
-    border-color: var(--warn-border);
-    color: var(--warn-text);
-}
-
-.side-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-}
-.side-card h3 { font-size: 14.5px; margin-bottom: 10px; }
-.side-note { font-size: 12.5px; color: var(--text-muted); margin-top: 10px; }
-
 .ticks { list-style: none; margin: 0; padding: 0; display: grid; gap: 9px; }
 .ticks-tight { gap: 5px; margin-bottom: 18px; }
 .ticks li {
@@ -1009,30 +916,6 @@ pre.code code {
     border-radius: 2px;
     background: var(--accent);
 }
-
-.pipe-card {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 24px;
-}
-.pipe-card-accent { border-color: var(--accent-border); background: #fbfdff; }
-.pipe-card h4 { margin-bottom: 10px; }
-.pipe-card p { color: var(--text-secondary); font-size: 15px; }
-.pipe-tag {
-    display: inline-block;
-    margin-bottom: 12px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.07em;
-    text-transform: uppercase;
-    color: var(--text-muted);
-    background: var(--bg-sunken);
-    border-radius: 999px;
-    padding: 3px 11px;
-}
-.pipe-card-accent .pipe-tag { background: var(--accent-light); color: var(--accent-hover); }
-.pipe-note { font-size: 13.5px; color: var(--text-muted); }
 
 /* ============================================================
    KONTO
@@ -1067,54 +950,6 @@ pre.code code {
     margin-bottom: 18px;
 }
 .account-card .btn { margin-top: 6px; }
-
-/* ============================================================
-   FAQ
-   ============================================================ */
-.faq { display: grid; gap: 10px; }
-.faq details {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 0 20px;
-}
-.faq details[open] { border-color: var(--accent-border); }
-.faq summary {
-    cursor: pointer;
-    padding: 16px 0;
-    font-weight: 600;
-    font-size: 15px;
-    list-style: none;
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-}
-.faq summary::-webkit-details-marker { display: none; }
-.faq summary::before {
-    content: '+';
-    flex-shrink: 0;
-    width: 21px;
-    height: 21px;
-    margin-top: 1px;
-    display: grid;
-    place-items: center;
-    border-radius: 6px;
-    background: var(--bg-sunken);
-    color: var(--text-secondary);
-    font-size: 15px;
-    line-height: 1;
-}
-.faq details[open] summary::before {
-    content: '–';
-    background: var(--accent);
-    color: #fff;
-}
-.faq details p {
-    margin: 0 0 16px;
-    padding-left: 33px;
-    font-size: 14.5px;
-    color: var(--text-secondary);
-}
 
 /* ============================================================
    CTA + STOPKA
@@ -1155,7 +990,6 @@ pre.code code {
     color: var(--dark-text-hi);
     font-size: 15px;
 }
-.footer-brand .brand-mark { background: var(--bg-dark-hi); }
 .footer-nav { display: flex; flex-wrap: wrap; gap: 18px; font-size: 14px; }
 .footer-nav a { color: var(--dark-text); }
 .footer-nav a:hover { color: #fff; }
@@ -1174,7 +1008,6 @@ pre.code code {
 @media (max-width: 1080px) {
     .hero-inner { grid-template-columns: minmax(0, 1fr); gap: 40px; }
     .hero-visual { order: -1; }
-    .split { grid-template-columns: minmax(0, 1fr); }
     .grid-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .app-content { grid-template-columns: minmax(0, 1fr); }
     .side-list { max-height: none; }

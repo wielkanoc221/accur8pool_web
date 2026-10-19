@@ -16,17 +16,11 @@
 
 <a class="skip-link" href="#tresc">Przejdź do treści</a>
 
-<!-- ============================================================
-     NAGŁÓWEK
-     Jedyne miejsce na stronie, które zmienia się zależnie od tego, czy
-     ktoś jest zalogowany. Reszta treści to instrukcja obsługi i jest
-     identyczna dla wszystkich — także dla kogoś, kto ma już konto
-     i przyszedł tu tylko sprawdzić, jakich kolumn wymaga plik.
-     ============================================================ -->
+<!-- Nagłówek -->
 <header class="site-header" id="site-header">
     <div class="wrap header-inner">
         <a class="brand" href="{% url 'home' %}">
-            <span class="brand-mark"><svg class="icon"><use href="#i-wave"></use></svg></span>
+            <span class="brand-mark">{% include "eight_ball.html" %}</span>
             <span class="brand-text">accur8<strong>pool</strong></span>
         </a>
 
@@ -34,8 +28,6 @@
             <a href="#czym-jest">Czym to jest</a>
             <a href="#demo">Demo</a>
             <a href="#start">Jak zacząć</a>
-            <a href="#dane">Twoje dane</a>
-            <a href="#pomoc">Pomoc</a>
         </nav>
 
         <div class="header-actions">
@@ -157,12 +149,9 @@
                 <p class="kicker">Czym jest ten projekt</p>
                 <h2>Od surowego zapisu czujnika do opisanego uderzenia</h2>
                 <p class="section-lede">
-                    Czujnik na nadgarstku zapisuje kilkadziesiąt–kilkaset próbek
-                    na sekundę. W takim pliku nie widać nic: jedna sesja
-                    treningowa to kilkanaście tysięcy wierszy, w których gdzieś
-                    siedzi kilka uderzeń. accur8pool robi z tego materiał do
-                    oglądania i porównywania — i pilnuje, żeby każdy krok tej
-                    drogi dało się powtórzyć.
+                    accur8pool przygotowuje dane z zegarka do analizy.
+                    Na wykresach możesz przyjrzeć się poszczególnym uderzeniom,
+                    a w widoku 3D odtworzyć ruch nadgarstka.
                 </p>
             </header>
 
@@ -533,9 +522,8 @@
                             otworzyć, w ogóle nie zobaczysz na liście.
                         </p>
                         <p class="step-note">
-                            Wymagania pliku opisuje sekcja
-                            <a href="#dane">Twoje dane</a>. Nazwa, która jest już
-                            zajęta, dostanie przyrostek <code>(2)</code> — stary
+                            Nazwa, która jest już zajęta, dostanie przyrostek
+                            <code>(2)</code> — stary
                             zestaw nie zostanie nadpisany.
                         </p>
                     </div>
@@ -582,217 +570,6 @@
                     </div>
                 </li>
             </ol>
-        </div>
-    </section>
-
-    <!-- ============================================================
-         DANE: WYMAGANIA I CO Z NIMI ROBIMY
-         ============================================================ -->
-    <section class="section section-alt" id="dane">
-        <div class="wrap">
-            <header class="section-head">
-                <p class="kicker">Twoje dane</p>
-                <h2>Czego wymaga plik i co się z nim dzieje</h2>
-                <p class="section-lede">
-                    Plik musi być zwykłym CSV z nagłówkiem w pierwszym wierszu.
-                    Nazwy kolumn porównujemy dokładnie — małymi literami, bez
-                    spacji. Jedna próbka to jeden wiersz.
-                </p>
-            </header>
-
-            <div class="split">
-                <div class="split-main">
-                    <h3 class="block-title">Kolumny wejściowe</h3>
-                    <div class="table-wrap">
-                        <table class="data-table">
-                            <thead>
-                            <tr>
-                                <th scope="col">Kolumny</th>
-                                <th scope="col">Co zawierają</th>
-                                <th scope="col">Wymagane</th>
-                            </tr>
-                            </thead>
-                            <tbody>
-                            <tr>
-                                <th scope="row"><code>accx</code> <code>accy</code> <code>accz</code></th>
-                                <td>Przyspieszenie z akcelerometru, trzy osie.</td>
-                                <td><span class="tag tag-req">tak</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row"><code>gyrx</code> <code>gyry</code> <code>gyrz</code></th>
-                                <td>Prędkość kątowa z żyroskopu, trzy osie.</td>
-                                <td><span class="tag tag-req">tak</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row"><code>timestamp</code></th>
-                                <td>
-                                    Znacznik czasu próbki. Z niego powstaje oś
-                                    czasu w sekundach (<code>time</code>) i on
-                                    decyduje o odtworzeniu ruchu w 3D.
-                                </td>
-                                <td><span class="tag tag-req">tak</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row"><code>rotx</code> <code>roty</code> <code>rotz</code>
-                                    <code>rotw</code></th>
-                                <td>
-                                    Wektor obrotu / kwaternion z czujnika. Bez
-                                    niego orientacja liczy się z samego
-                                    żyroskopu — mniej dokładnie.
-                                </td>
-                                <td><span class="tag tag-rec">zalecane</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row"><code>linaccx</code> <code>linaccy</code>
-                                    <code>linaccz</code></th>
-                                <td>Przyspieszenie liniowe, już bez grawitacji.</td>
-                                <td><span class="tag">opcjonalne</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row"><code>magx</code> <code>magy</code> <code>magz</code></th>
-                                <td>Magnetometr, trzy osie.</td>
-                                <td><span class="tag">opcjonalne</span></td>
-                            </tr>
-                            <tr>
-                                <th scope="row"><code>csv_version</code></th>
-                                <td>
-                                    Obecność tej kolumny przełącza przygotowanie
-                                    na wariant dla nowszego formatu zapisu.
-                                </td>
-                                <td><span class="tag">opcjonalne</span></td>
-                            </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                    <p class="note note-warn">
-                        <svg class="icon"><use href="#i-alert"></use></svg>
-                        <span>
-                            Brak choćby jednej kolumny wymaganej kończy upload
-                            komunikatem <code>Brakuje wymaganych kolumn: …</code>
-                            i plik <strong>nie wchodzi</strong> do systemu — nie
-                            zostaje po nim ani pozycja na liście, ani plik na
-                            dysku.
-                        </span>
-                    </p>
-                </div>
-
-                <aside class="split-side">
-                    <div class="side-card">
-                        <h3>Limity uploadu</h3>
-                        <ul class="ticks">
-                            <li>rozszerzenie <code>.csv</code></li>
-                            <li>maksymalnie 300&nbsp;MB</li>
-                            <li>plik nie może być pusty</li>
-                            <li>pierwsze wiersze muszą dać się odczytać jako CSV</li>
-                        </ul>
-                    </div>
-                    <div class="side-card">
-                        <h3>Przykładowy nagłówek</h3>
-                        <pre class="code"><code>accx,accy,accz,gyrx,gyry,gyrz,
-magx,magy,magz,linaccx,linaccy,
-linaccz,rotx,roty,rotz,timestamp</code></pre>
-                        <p class="side-note">
-                            Kolejność kolumn nie ma znaczenia — liczy się to,
-                            że są.
-                        </p>
-                    </div>
-                </aside>
-            </div>
-
-            <h3 class="block-title block-title-spaced">Co powstaje po wgraniu</h3>
-            <p class="block-lede">
-                Twój plik zostaje na serwerze <strong>w dwóch wersjach</strong>
-                o tej samej nazwie. Aplikacja rysuje i liczy wyłącznie z wersji
-                przygotowanej; wersja surowa jest po to, żeby dało się to
-                przygotowanie kiedyś powtórzyć w innym narzędziu.
-            </p>
-
-            <div class="grid grid-2">
-                <article class="pipe-card">
-                    <span class="pipe-tag">wersja surowa</span>
-                    <h4>Dokładnie ten plik, który przysłałeś</h4>
-                    <p>
-                        Bajt w bajt, bez żadnej zmiany. Dostępny do pobrania jako
-                        <code>…_raw.csv</code>.
-                    </p>
-                    <p class="pipe-note">
-                        Zestaw demonstracyjny nie ma tej wersji — wchodzi na konto
-                        od razu przygotowany. To normalny stan, a nie usterka.
-                    </p>
-                </article>
-
-                <article class="pipe-card pipe-card-accent">
-                    <span class="pipe-tag">wersja przygotowana</span>
-                    <h4>To, co widzisz na wykresie</h4>
-                    <ul class="ticks">
-                        <li>
-                            <strong>filtr dolnoprzepustowy</strong> — 10&nbsp;Hz dla
-                            <code>acc*</code> i <code>linacc*</code>, 5&nbsp;Hz dla
-                            <code>gyr*</code> i <code>mag*</code>
-                        </li>
-                        <li>
-                            <code>rot*</code> <strong>nie jest filtrowane</strong>
-                            — to składowe kwaternionu, filtr osobno na każdej
-                            osi zepsułby opis obrotu
-                        </li>
-                        <li>
-                            <code>acc_magnitude</code>, <code>gyr_magnitude</code>
-                            — moduły obu wektorów
-                        </li>
-                        <li>
-                            <code>time</code> — oś czasu w sekundach, liczona od
-                            początku nagrania
-                        </li>
-                        <li>
-                            <code>jerk_acc*</code>, <code>jerk_gyr*</code>
-                            i moduły ich pochodnych
-                        </li>
-                        <li><code>roll</code>, <code>pitch</code> — kąty przechyłu</li>
-                        <li>
-                            <code>session_index</code> — nazwa pliku źródłowego,
-                            żeby po scaleniu nagrań wiadomo było, skąd jest wiersz
-                        </li>
-                    </ul>
-                </article>
-            </div>
-
-            <div class="grid grid-2 grid-spaced">
-                <article class="pipe-card">
-                    <h4>Wykres 2D</h4>
-                    <p>
-                        Serie są <strong>znormalizowane do zakresu 0–1</strong>,
-                        żeby dało się porównać przebiegi w różnych jednostkach na
-                        jednej osi. Wartości fizyczne zostają nietknięte
-                        w pobieranym pliku i w rekonstrukcji 3D.
-                    </p>
-                    <p>
-                        Cały przebieg jest decymowany metodą min–max — z każdego
-                        kubełka zostaje próbka najmniejsza i największa, więc
-                        krótkie szczyty nie znikają. Po przybliżeniu przeglądarka
-                        dopytuje serwer o pełną rozdzielczość widocznego zakresu
-                        z zapasem na przesuwanie.
-                    </p>
-                </article>
-
-                <article class="pipe-card">
-                    <h4>Ruch 3D</h4>
-                    <p>
-                        Zakładka jest aktywna, gdy plik ma oś czasu
-                        (<code>time</code> albo <code>timestamp</code>) oraz
-                        komplet <code>rot*</code> albo komplet <code>gyr*</code>.
-                        Sam akcelerometr nie wystarczy: bez orientacji nie da się
-                        oddzielić grawitacji od ruchu.
-                    </p>
-                    <p>
-                        Animacja liczy się zawsze dla <strong>jednego
-                        segmentu</strong>, nigdy dla widocznego fragmentu
-                        wykresu. Do dyspozycji masz odtwarzanie w pętli, tempo od
-                        0,1× do 2×, suwak pozycji, obrót sceny wokół pojedynczej
-                        osi oraz statystyki: czas segmentu, drogę nadgarstka
-                        i prędkość maksymalną.
-                    </p>
-                </article>
-            </div>
         </div>
     </section>
 
@@ -863,127 +640,6 @@ linaccz,rotx,roty,rotz,timestamp</code></pre>
     </section>
 
     <!-- ============================================================
-         POMOC
-         ============================================================ -->
-    <section class="section section-alt" id="pomoc">
-        <div class="wrap wrap-narrow">
-            <header class="section-head">
-                <p class="kicker">Pomoc</p>
-                <h2>Komunikaty i najczęstsze pytania</h2>
-                <p class="section-lede">
-                    Poniżej dokładnie te zdania, które zobaczysz w aplikacji, wraz
-                    z tym, co robić dalej.
-                </p>
-            </header>
-
-            <div class="faq">
-                <details>
-                    <summary>„Brakuje wymaganych kolumn: …”</summary>
-                    <p>
-                        W nagłówku pliku nie ma którejś z kolumn
-                        <code>accx</code>, <code>accy</code>, <code>accz</code>,
-                        <code>gyrx</code>, <code>gyry</code>, <code>gyrz</code>,
-                        <code>timestamp</code>. Komunikat wymienia brakujące po
-                        nazwie. Sprawdź, czy eksport z czujnika nie zmienił nazw
-                        (wielkie litery, spacje, prefiksy) i czy nagłówek jest
-                        w pierwszym wierszu pliku.
-                    </p>
-                </details>
-
-                <details>
-                    <summary>„Dozwolone są tylko pliki .csv.”</summary>
-                    <p>
-                        Przyjmowane jest wyłącznie rozszerzenie <code>.csv</code>.
-                        Arkusz <code>.xlsx</code> ani archiwum <code>.zip</code>
-                        nie przejdą — wyeksportuj dane do CSV i spróbuj ponownie.
-                    </p>
-                </details>
-
-                <details>
-                    <summary>„Plik jest za duży (limit 300 MB).”</summary>
-                    <p>
-                        Podziel nagranie na krótsze sesje. Do pracy nad techniką
-                        i tak wygodniejszy jest wycinek z kilkoma uderzeniami niż
-                        cały trening: krótszy plik szybciej się wczytuje
-                        i łatwiej w nim trafić w granice uderzenia.
-                    </p>
-                </details>
-
-                <details>
-                    <summary>„Nie udało się odczytać pliku jako CSV.”</summary>
-                    <p>
-                        Plik ma rozszerzenie <code>.csv</code>, ale jego treść nie
-                        jest tabelą — typowo przez inny separator, znaki spoza
-                        UTF-8 albo nagłówek doklejony po kilku wierszach opisu.
-                        Otwórz plik w edytorze tekstu i sprawdź pierwsze wiersze.
-                    </p>
-                </details>
-
-                <details>
-                    <summary>Zakładka „Ruch 3D” jest nieaktywna</summary>
-                    <p>
-                        Plik nie ma kompletu kolumn potrzebnych do odtworzenia
-                        orientacji: potrzebna jest oś czasu
-                        (<code>time</code> albo <code>timestamp</code>) plus
-                        wszystkie trzy <code>rot*</code> albo wszystkie trzy
-                        <code>gyr*</code>.
-                    </p>
-                </details>
-
-                <details>
-                    <summary>„Zaznacz uderzenie na wykresie 2D — animacja liczy się
-                        dla pojedynczego segmentu.”</summary>
-                    <p>
-                        Rekonstrukcja 3D opisuje jeden ruch, więc potrzebuje
-                        zaznaczonego segmentu, a nie dowolnego fragmentu wykresu.
-                        Wróć na zakładkę „Przebieg 2D”, zaznacz uderzenie
-                        i wybierz je z listy nad sceną.
-                    </p>
-                </details>
-
-                <details>
-                    <summary>Mój plik nazywa się teraz „nagranie(2).csv”</summary>
-                    <p>
-                        Nazwa była już zajęta przez inny twój zestaw. Zamiast
-                        nadpisać starszy plik, nowy dostaje kolejny numer. Nazwy
-                        są też oczyszczane ze spacji i znaków, które nie mogą
-                        trafić do adresu.
-                    </p>
-                </details>
-
-                <details>
-                    <summary>Usunąłem zestaw demonstracyjny — czy wróci?</summary>
-                    <p>
-                        Nie. Demo zakładane jest raz, przy tworzeniu konta.
-                        Usunięcie zestawu jest twoją decyzją, a nie usterką do
-                        naprawienia przy następnym logowaniu.
-                    </p>
-                </details>
-
-                <details>
-                    <summary>Czy inni zobaczą moje nagrania?</summary>
-                    <p>
-                        Nie. Każdy zestaw ma właściciela, a wszystkie zapytania —
-                        wykres, zakresy, segmenty, pobieranie — szukają pliku
-                        wyłącznie wśród zestawów zalogowanego użytkownika. Nazwa
-                        z adresu nigdy nie buduje ścieżki na dysku samodzielnie.
-                    </p>
-                </details>
-
-                <details>
-                    <summary>Dlaczego wartości na wykresie są między 0 a 1?</summary>
-                    <p>
-                        Serie są normalizowane, żeby przyspieszenie, prędkość
-                        kątowa i kąty dały się porównać na jednej osi. Wartości
-                        w jednostkach fizycznych znajdziesz w pobranym pliku
-                        przygotowanym — i to na nich liczona jest animacja 3D.
-                    </p>
-                </details>
-            </div>
-        </div>
-    </section>
-
-    <!-- ============================================================
          CTA
          ============================================================ -->
     <section class="cta">
@@ -1030,15 +686,13 @@ linaccz,rotx,roty,rotz,timestamp</code></pre>
 <footer class="site-footer">
     <div class="wrap footer-inner">
         <div class="footer-brand">
-            <span class="brand-mark"><svg class="icon"><use href="#i-wave"></use></svg></span>
+            <span class="brand-mark">{% include "eight_ball.html" %}</span>
             <span>accur8<strong>pool</strong></span>
         </div>
         <nav class="footer-nav" aria-label="Stopka">
             <a href="#czym-jest">Czym to jest</a>
             <a href="#demo">Demo</a>
             <a href="#start">Jak zacząć</a>
-            <a href="#dane">Twoje dane</a>
-            <a href="#pomoc">Pomoc</a>
             {% if request.user.is_authenticated %}
                 <a href="{% url 'dashboard' %}">Dashboard</a>
             {% else %}
