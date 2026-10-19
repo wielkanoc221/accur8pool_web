@@ -1,0 +1,1056 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>accur8pool — analiza ruchu w bilardzie z czujnika IMU</title>
+    <meta name="description"
+          content="accur8pool zamienia nagranie z czujnika na nadgarstku w wykres,
+                   podzielony na pojedyncze uderzenia i ich fazy, oraz w animację
+                   ruchu nadgarstka w 3D.">
+    <link rel="stylesheet" href="{% static 'css/home.css' %}">
+</head>
+<body>
+{% include "icons.html" %}
+
+<a class="skip-link" href="#tresc">Przejdź do treści</a>
+
+<!-- ============================================================
+     NAGŁÓWEK
+     Jedyne miejsce na stronie, które zmienia się zależnie od tego, czy
+     ktoś jest zalogowany. Reszta treści to instrukcja obsługi i jest
+     identyczna dla wszystkich — także dla kogoś, kto ma już konto
+     i przyszedł tu tylko sprawdzić, jakich kolumn wymaga plik.
+     ============================================================ -->
+<header class="site-header" id="site-header">
+    <div class="wrap header-inner">
+        <a class="brand" href="{% url 'home' %}">
+            <span class="brand-mark"><svg class="icon"><use href="#i-wave"></use></svg></span>
+            <span class="brand-text">accur8<strong>pool</strong></span>
+        </a>
+
+        <nav class="site-nav" aria-label="Sekcje strony">
+            <a href="#czym-jest">Czym to jest</a>
+            <a href="#demo">Demo</a>
+            <a href="#start">Jak zacząć</a>
+            <a href="#dane">Twoje dane</a>
+            <a href="#pomoc">Pomoc</a>
+        </nav>
+
+        <div class="header-actions">
+            {% if request.user.is_authenticated %}
+                <span class="header-user" title="Zalogowany jako {{ request.user.username }}">
+                    {{ request.user.username }}
+                </span>
+                <a class="btn btn-primary" href="{% url 'dashboard' %}">
+                    <svg class="icon"><use href="#i-chart"></use></svg>
+                    Otwórz dashboard
+                </a>
+            {% else %}
+                <a class="btn btn-ghost" href="{% url 'login' %}">Zaloguj się</a>
+                <a class="btn btn-primary" href="{% url 'register' %}">Załóż konto</a>
+            {% endif %}
+        </div>
+
+        <button type="button" class="nav-burger" id="nav-burger"
+                aria-expanded="false" aria-controls="site-header"
+                aria-label="Menu">
+            <svg class="icon icon-lg"><use href="#i-menu"></use></svg>
+        </button>
+    </div>
+</header>
+
+<main id="tresc">
+
+    <!-- ============================================================
+         HERO
+         ============================================================ -->
+    <section class="hero">
+        <div class="wrap hero-inner">
+            <div class="hero-copy">
+                <p class="eyebrow">
+                    <svg class="icon"><use href="#i-target"></use></svg>
+                    Analiza techniki uderzenia
+                </p>
+                <h1>Nagranie z nadgarstka.<br>Uderzenie po uderzeniu.</h1>
+                <p class="lede">
+                    accur8pool bierze plik CSV z czujnika ruchu (akcelerometr,
+                    żyroskop, magnetometr), przygotowuje go i pokazuje jako
+                    przebieg, na którym zaznaczasz pojedyncze uderzenia
+                    i rozkładasz każde na cztery fazy. Zaznaczony fragment
+                    aplikacja odtwarza jako ruch nadgarstka w&nbsp;3D.
+                </p>
+
+                <div class="hero-cta">
+                    {% if request.user.is_authenticated %}
+                        <a class="btn btn-primary btn-lg" href="{% url 'dashboard' %}">
+                            <svg class="icon"><use href="#i-chart"></use></svg>
+                            Przejdź do dashboardu
+                        </a>
+                        <a class="btn btn-outline btn-lg" href="#start">
+                            Jak korzystać
+                        </a>
+                    {% else %}
+                        <a class="btn btn-primary btn-lg" href="{% url 'register' %}">
+                            Załóż konto
+                        </a>
+                        <a class="btn btn-outline btn-lg" href="#demo">
+                            <svg class="icon"><use href="#i-play"></use></svg>
+                            Zobacz demo bez logowania
+                        </a>
+                    {% endif %}
+                </div>
+
+                <p class="hero-note">
+                    Każde nowe konto dostaje własną kopię zestawu
+                    demonstracyjnego{% if demo_segments %} z&nbsp;{{ demo_segments }}
+                    opisanymi uderzeniami{% endif %} — jest co oglądać, zanim
+                    wgrasz cokolwiek własnego.
+                </p>
+            </div>
+
+            <!-- Miniatura dashboardu. To ta sama grafika, co w sekcji demo
+                 niżej, tylko mniejsza i bez panelu bocznego — rysuje ją
+                 home.js z tych samych danych. -->
+            <div class="hero-visual" aria-hidden="true">
+                <div class="hero-glass">
+                    <div class="hero-plot" data-plot="hero"></div>
+                    <div class="hero-chips">
+                        <span class="chip chip-prep">przygotowanie</span>
+                        <span class="chip chip-addr">przymierzanie</span>
+                        <span class="chip chip-hit">uderzenie</span>
+                        <span class="chip chip-follow">po uderzeniu</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="wrap">
+            <dl class="stat-strip">
+                <div>
+                    <dt>Format wejściowy</dt>
+                    <dd>CSV z&nbsp;IMU</dd>
+                </div>
+                <div>
+                    <dt>Limit pliku</dt>
+                    <dd>300&nbsp;MB</dd>
+                </div>
+                <div>
+                    <dt>Fazy uderzenia</dt>
+                    <dd>4</dd>
+                </div>
+                <div>
+                    <dt>Zestaw demo</dt>
+                    <dd>{% if demo_rows_label %}{{ demo_rows_label }} wierszy{% else %}w komplecie{% endif %}</dd>
+                </div>
+            </dl>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         CZYM TO JEST
+         ============================================================ -->
+    <section class="section" id="czym-jest">
+        <div class="wrap">
+            <header class="section-head">
+                <p class="kicker">Czym jest ten projekt</p>
+                <h2>Od surowego zapisu czujnika do opisanego uderzenia</h2>
+                <p class="section-lede">
+                    Czujnik na nadgarstku zapisuje kilkadziesiąt–kilkaset próbek
+                    na sekundę. W takim pliku nie widać nic: jedna sesja
+                    treningowa to kilkanaście tysięcy wierszy, w których gdzieś
+                    siedzi kilka uderzeń. accur8pool robi z tego materiał do
+                    oglądania i porównywania — i pilnuje, żeby każdy krok tej
+                    drogi dało się powtórzyć.
+                </p>
+            </header>
+
+            <div class="grid grid-3">
+                <article class="feature">
+                    <span class="feature-icon"><svg class="icon icon-lg"><use href="#i-upload"></use></svg></span>
+                    <h3>Przygotowanie danych bez twojego udziału</h3>
+                    <p>
+                        Zaraz po wgraniu plik przechodzi filtrację
+                        dolnoprzepustową, dostaje moduły przyspieszenia
+                        i prędkości kątowej, pochodne (jerk) oraz kąty roll
+                        i pitch. Nie musisz niczego liczyć wcześniej.
+                    </p>
+                </article>
+
+                <article class="feature">
+                    <span class="feature-icon"><svg class="icon icon-lg"><use href="#i-wave"></use></svg></span>
+                    <h3>Wykres, który nie gubi szczegółu</h3>
+                    <p>
+                        Cały przebieg mieści się na ekranie dzięki decymacji
+                        min–max, ale każde przybliżenie doczytuje z serwera
+                        pełną rozdzielczość widocznego zakresu. Im głębiej
+                        wchodzisz, tym bliżej surowych próbek.
+                    </p>
+                </article>
+
+                <article class="feature">
+                    <span class="feature-icon"><svg class="icon icon-lg"><use href="#i-scissors"></use></svg></span>
+                    <h3>Segment to jedno uderzenie</h3>
+                    <p>
+                        Zaznaczasz je przeciągnięciem po wykresie. Numeracja
+                        bierze się z położenia na osi czasu, więc dodanie
+                        uderzenia w środku nagrania nie robi dziur w liście
+                        ani numerów w złej kolejności.
+                    </p>
+                </article>
+
+                <article class="feature">
+                    <span class="feature-icon"><svg class="icon icon-lg"><use href="#i-target"></use></svg></span>
+                    <h3>Cztery fazy w każdym uderzeniu</h3>
+                    <p>
+                        Przygotowanie, przymierzanie, uderzenie i okres po
+                        uderzeniu. Każda faza występuje w segmencie najwyżej
+                        raz i nie może z niego wystawać — ponowne zaznaczenie
+                        poprawia zakres zamiast tworzyć duplikat.
+                    </p>
+                </article>
+
+                <article class="feature">
+                    <span class="feature-icon"><svg class="icon icon-lg"><use href="#i-cube"></use></svg></span>
+                    <h3>Ruch nadgarstka w 3D</h3>
+                    <p>
+                        Zaznaczone uderzenie aplikacja rekonstruuje jako tor
+                        w przestrzeni: odtwarzanie w pętli, spowolnienie do
+                        0,1×, obrót sceny co 15° oraz droga i prędkość
+                        maksymalna nadgarstka.
+                    </p>
+                </article>
+
+                <article class="feature">
+                    <span class="feature-icon"><svg class="icon icon-lg"><use href="#i-download"></use></svg></span>
+                    <h3>Dane zostają twoje</h3>
+                    <p>
+                        Na serwerze leżą dwie wersje każdego pliku: dokładnie
+                        ta, którą przysłałeś, i ta po przygotowaniu. Obie
+                        pobierzesz w każdej chwili ze strony „Pobieranie”.
+                    </p>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         DEMO
+         Dwie zakładki: podgląd dashboardu (na PRAWDZIWYM wycinku
+         zestawu demonstracyjnego) i podgląd pracy z plikami.
+         Wszystko dzieje się w przeglądarce — żaden przycisk w tej
+         sekcji nie wysyła niczego na serwer.
+         ============================================================ -->
+    <section class="section section-alt" id="demo">
+        <div class="wrap">
+            <header class="section-head">
+                <p class="kicker">Demo</p>
+                <h2>Zobacz, jak to wygląda w środku</h2>
+                <p class="section-lede">
+                    Poniżej dwa podglądy aplikacji: dashboard z wykresem
+                    i panelem uderzeń oraz ekran pracy z plikami. Wykres rysuje
+                    <strong>prawdziwy fragment zestawu demonstracyjnego</strong>,
+                    tego samego, który dostaje każde nowe konto. Nic tu nie jest
+                    wysyłane na serwer — to podgląd, nie działająca aplikacja.
+                </p>
+            </header>
+
+            <div class="demo-tabs" role="tablist" aria-label="Podgląd aplikacji">
+                <button type="button" class="demo-tab is-active" role="tab"
+                        id="tab-dash" aria-controls="panel-dash" aria-selected="true"
+                        data-demo-tab="dash">
+                    <svg class="icon"><use href="#i-chart"></use></svg>
+                    Demo dashboardu
+                </button>
+                <button type="button" class="demo-tab" role="tab"
+                        id="tab-files" aria-controls="panel-files" aria-selected="false"
+                        data-demo-tab="files">
+                    <svg class="icon"><use href="#i-folder"></use></svg>
+                    Demo pracy z plikami
+                </button>
+            </div>
+
+            <!-- ---------- PANEL 1: dashboard ---------- -->
+            <div class="demo-panel is-active" id="panel-dash"
+                 role="tabpanel" aria-labelledby="tab-dash">
+
+                <div class="app-frame">
+                    <div class="app-rail" aria-hidden="true">
+                        <span class="rail-dot"><svg class="icon"><use href="#i-wave"></use></svg></span>
+                        <span class="rail-item is-active" title="Dashboard">
+                            <svg class="icon"><use href="#i-chart"></use></svg>
+                        </span>
+                        <span class="rail-item" title="Zestawy danych">
+                            <svg class="icon"><use href="#i-folder"></use></svg>
+                        </span>
+                        <span class="rail-item" title="Pobieranie">
+                            <svg class="icon"><use href="#i-download"></use></svg>
+                        </span>
+                        <span class="rail-spacer"></span>
+                        <span class="rail-item" title="Wyloguj">
+                            <svg class="icon"><use href="#i-power"></use></svg>
+                        </span>
+                    </div>
+
+                    <div class="app-body">
+                        <div class="app-topbar">
+                            <div class="app-title">
+                                <strong>Dashboard</strong>
+                                <span data-demo-name>{{ preview.name|default:"Demo" }}</span>
+                            </div>
+                            <div class="app-viewtabs" aria-hidden="true">
+                                <span class="is-active">Przebieg 2D</span>
+                                <span>Ruch 3D</span>
+                            </div>
+                        </div>
+
+                        <div class="app-content">
+                            <div class="app-chart">
+                                <div class="chart-head">
+                                    <div>
+                                        <div class="chart-title">Przebieg pomiarów</div>
+                                        <div class="chart-sub" data-demo-hint>
+                                            Kliknij uderzenie po prawej, żeby przybliżyć
+                                            jego zakres
+                                        </div>
+                                    </div>
+                                    <button type="button" class="btn btn-ghost btn-sm"
+                                            data-demo-reset>
+                                        <svg class="icon"><use href="#i-reset"></use></svg>
+                                        Reset
+                                    </button>
+                                </div>
+
+                                <div class="plot-slot" data-plot="demo">
+                                    <p class="plot-fallback">
+                                        Podgląd wykresu jest niedostępny.
+                                        {% if not request.user.is_authenticated %}
+                                            <a href="{% url 'register' %}">Załóż konto</a>,
+                                            aby otworzyć zestaw demonstracyjny
+                                            w prawdziwym dashboardzie.
+                                        {% endif %}
+                                    </p>
+                                </div>
+
+                                <div class="plot-legend" data-demo-legend></div>
+
+                                <div class="app-stats">
+                                    <div class="app-stat">
+                                        <span>Rekordy</span>
+                                        <strong>{{ demo_rows_label|default:"—" }}</strong>
+                                    </div>
+                                    <div class="app-stat">
+                                        <span>Kolumny</span>
+                                        <strong>{{ demo_columns|default:"—" }}</strong>
+                                    </div>
+                                    <div class="app-stat">
+                                        <span>Uderzenia</span>
+                                        <strong>{{ demo_segments|default:"—" }}</strong>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <aside class="app-side">
+                                <div class="side-head">
+                                    <strong data-demo-side-title>Segmenty</strong>
+                                    <span data-demo-side-sub>
+                                        Zaznaczone uderzenia: {{ demo_segments }}
+                                    </span>
+                                </div>
+                                <div class="side-list" data-demo-list></div>
+                            </aside>
+                        </div>
+                    </div>
+                </div>
+
+                <p class="demo-foot">
+                    <svg class="icon"><use href="#i-info"></use></svg>
+                    W prawdziwym dashboardzie wykres jest interaktywny (przybliżanie,
+                    ukrywanie serii, tryb pełnoekranowy), a każde zaznaczenie zapisuje
+                    się na serwerze. Tutaj widzisz jego uproszczony obraz.
+                </p>
+            </div>
+
+            <!-- ---------- PANEL 2: pliki ---------- -->
+            <div class="demo-panel" id="panel-files" role="tabpanel"
+                 aria-labelledby="tab-files" hidden>
+
+                <div class="app-frame">
+                    <div class="app-rail" aria-hidden="true">
+                        <span class="rail-dot"><svg class="icon"><use href="#i-wave"></use></svg></span>
+                        <span class="rail-item" title="Dashboard">
+                            <svg class="icon"><use href="#i-chart"></use></svg>
+                        </span>
+                        <span class="rail-item is-active" title="Zestawy danych">
+                            <svg class="icon"><use href="#i-folder"></use></svg>
+                        </span>
+                        <span class="rail-item" title="Pobieranie">
+                            <svg class="icon"><use href="#i-download"></use></svg>
+                        </span>
+                        <span class="rail-spacer"></span>
+                        <span class="rail-item" title="Wyloguj">
+                            <svg class="icon"><use href="#i-power"></use></svg>
+                        </span>
+                    </div>
+
+                    <div class="app-body">
+                        <div class="app-topbar">
+                            <div class="app-title">
+                                <strong>Zestawy danych</strong>
+                                <span>Twoje pliki na serwerze</span>
+                            </div>
+                        </div>
+
+                        <div class="app-content app-content-files">
+                            <div class="upload-box">
+                                <div class="upload-copy">
+                                    <strong>Dodaj zestaw danych</strong>
+                                    <span>
+                                        Plik <code>.csv</code> z czujnika, do 300&nbsp;MB.
+                                        Sprawdź poniżej, co się stanie w każdym z dwóch
+                                        przypadków.
+                                    </span>
+                                </div>
+                                <div class="upload-actions">
+                                    <button type="button" class="btn btn-primary btn-sm"
+                                            data-demo-upload="ok">
+                                        <svg class="icon"><use href="#i-upload"></use></svg>
+                                        Wgraj poprawny plik
+                                    </button>
+                                    <button type="button" class="btn btn-outline btn-sm"
+                                            data-demo-upload="bad">
+                                        <svg class="icon"><use href="#i-alert"></use></svg>
+                                        Wgraj plik bez kolumn IMU
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div class="upload-status" data-demo-status hidden></div>
+
+                            <div class="files-table-wrap">
+                                <table class="files-table">
+                                    <thead>
+                                    <tr>
+                                        <th scope="col">Zestaw</th>
+                                        <th scope="col">Rekordy</th>
+                                        <th scope="col">Dodano</th>
+                                        <th scope="col">Do pobrania</th>
+                                        <th scope="col"><span class="sr-only">Akcje</span></th>
+                                    </tr>
+                                    </thead>
+                                    <tbody data-demo-files></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <p class="demo-foot">
+                    <svg class="icon"><use href="#i-info"></use></svg>
+                    To symulacja — przyciski nic nie wysyłają i nic nie zapisują.
+                    Pokazuje dokładnie te komunikaty, które zobaczysz w aplikacji,
+                    razem z powodem odrzucenia pliku.
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         JAK ZACZĄĆ
+         ============================================================ -->
+    <section class="section" id="start">
+        <div class="wrap">
+            <header class="section-head">
+                <p class="kicker">Instrukcja</p>
+                <h2>Jak z tego korzystać — krok po kroku</h2>
+                <p class="section-lede">
+                    Pięć kroków od pustego konta do opisanego uderzenia
+                    obejrzanego w 3D. Krok 1 i 2 robisz raz, kroki 3–5
+                    powtarzasz dla każdego nagrania.
+                </p>
+            </header>
+
+            <ol class="steps">
+                <li class="step">
+                    <span class="step-no">1</span>
+                    <div class="step-body">
+                        <h3>Załóż konto</h3>
+                        <p>
+                            Rejestracja to nazwa użytkownika, adres e-mail i hasło
+                            (dwa razy, dla pewności). Hasło przechodzi standardową
+                            kontrolę Django: nie może być zbyt krótkie, zbyt
+                            popularne, złożone z samych cyfr ani zbyt podobne do
+                            twojego loginu.
+                        </p>
+                        <p class="step-note">
+                            Zaraz po założeniu konta dostajesz <strong>własną kopię
+                            zestawu demonstracyjnego</strong> z rozrysowanymi
+                            uderzeniami i fazami. Jest twoja: możesz ją zmieniać
+                            i usunąć jak każdy inny zestaw — ale usunięta nie
+                            wróci.
+                        </p>
+                        {% if not request.user.is_authenticated %}
+                            <a class="step-link" href="{% url 'register' %}">
+                                Przejdź do rejestracji
+                                <svg class="icon"><use href="#i-arrow-right"></use></svg>
+                            </a>
+                        {% endif %}
+                    </div>
+                </li>
+
+                <li class="step">
+                    <span class="step-no">2</span>
+                    <div class="step-body">
+                        <h3>Zaloguj się</h3>
+                        <p>
+                            Po zalogowaniu lądujesz na dashboardzie. Jeśli
+                            wcześniej próbowałeś wejść na konkretny adres,
+                            wrócisz dokładnie tam, a nie na stronę startową.
+                            Wylogowanie jest w lewym dolnym rogu każdego ekranu
+                            aplikacji.
+                        </p>
+                        {% if not request.user.is_authenticated %}
+                            <a class="step-link" href="{% url 'login' %}">
+                                Przejdź do logowania
+                                <svg class="icon"><use href="#i-arrow-right"></use></svg>
+                            </a>
+                        {% endif %}
+                    </div>
+                </li>
+
+                <li class="step">
+                    <span class="step-no">3</span>
+                    <div class="step-body">
+                        <h3>Wgraj plik CSV</h3>
+                        <p>
+                            „Zestawy danych” w menu bocznym → <em>Wybierz plik
+                            CSV</em>. Ten sam przycisk jest w wysuwanym panelu
+                            „Dostępne pliki” na dashboardzie, więc nie musisz
+                            zmieniać ekranu. Plik jest przyjmowany
+                            <strong>tylko wtedy</strong>, gdy uda się przygotować
+                            z niego wersję roboczą — zestawu, którego nie da się
+                            otworzyć, w ogóle nie zobaczysz na liście.
+                        </p>
+                        <p class="step-note">
+                            Wymagania pliku opisuje sekcja
+                            <a href="#dane">Twoje dane</a>. Nazwa, która jest już
+                            zajęta, dostanie przyrostek <code>(2)</code> — stary
+                            zestaw nie zostanie nadpisany.
+                        </p>
+                    </div>
+                </li>
+
+                <li class="step">
+                    <span class="step-no">4</span>
+                    <div class="step-body">
+                        <h3>Zaznacz uderzenia i ich fazy</h3>
+                        <p>
+                            Na dashboardzie, w panelu po prawej, kliknij
+                            <em>Zaznacz uderzenie</em> i przeciągnij po wykresie
+                            zakres jednego uderzenia. Segment dostanie kolejny
+                            numer. Kliknięcie segmentu na liście przybliża go na
+                            wykresie i otwiera jego cztery fazy — każdą
+                            zaznaczasz osobno, tym samym przeciągnięciem,
+                            wewnątrz segmentu.
+                        </p>
+                        <div class="phase-legend">
+                            <span class="phase-pill phase-prep">Przygotowanie</span>
+                            <span class="phase-pill phase-addr">Przymierzanie</span>
+                            <span class="phase-pill phase-hit">Uderzenie</span>
+                            <span class="phase-pill phase-follow">Po uderzeniu</span>
+                        </div>
+                        <p class="step-note">
+                            Granice segmentów to <strong>numery wierszy CSV</strong>
+                            — dokładnie to, co widzisz na osi X. Wszystko zapisuje
+                            się na serwerze od razu, bez osobnego przycisku
+                            „zapisz”.
+                        </p>
+                    </div>
+                </li>
+
+                <li class="step">
+                    <span class="step-no">5</span>
+                    <div class="step-body">
+                        <h3>Obejrzyj ruch w 3D i zabierz dane</h3>
+                        <p>
+                            Zakładka <em>Ruch 3D</em> nad wykresem odtwarza
+                            zaznaczone uderzenie jako tor nadgarstka
+                            w przestrzeni. Gotowe pliki — surowy i przygotowany —
+                            pobierzesz ze strony „Pobieranie”.
+                        </p>
+                    </div>
+                </li>
+            </ol>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         DANE: WYMAGANIA I CO Z NIMI ROBIMY
+         ============================================================ -->
+    <section class="section section-alt" id="dane">
+        <div class="wrap">
+            <header class="section-head">
+                <p class="kicker">Twoje dane</p>
+                <h2>Czego wymaga plik i co się z nim dzieje</h2>
+                <p class="section-lede">
+                    Plik musi być zwykłym CSV z nagłówkiem w pierwszym wierszu.
+                    Nazwy kolumn porównujemy dokładnie — małymi literami, bez
+                    spacji. Jedna próbka to jeden wiersz.
+                </p>
+            </header>
+
+            <div class="split">
+                <div class="split-main">
+                    <h3 class="block-title">Kolumny wejściowe</h3>
+                    <div class="table-wrap">
+                        <table class="data-table">
+                            <thead>
+                            <tr>
+                                <th scope="col">Kolumny</th>
+                                <th scope="col">Co zawierają</th>
+                                <th scope="col">Wymagane</th>
+                            </tr>
+                            </thead>
+                            <tbody>
+                            <tr>
+                                <th scope="row"><code>accx</code> <code>accy</code> <code>accz</code></th>
+                                <td>Przyspieszenie z akcelerometru, trzy osie.</td>
+                                <td><span class="tag tag-req">tak</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>gyrx</code> <code>gyry</code> <code>gyrz</code></th>
+                                <td>Prędkość kątowa z żyroskopu, trzy osie.</td>
+                                <td><span class="tag tag-req">tak</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>timestamp</code></th>
+                                <td>
+                                    Znacznik czasu próbki. Z niego powstaje oś
+                                    czasu w sekundach (<code>time</code>) i on
+                                    decyduje o odtworzeniu ruchu w 3D.
+                                </td>
+                                <td><span class="tag tag-req">tak</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>rotx</code> <code>roty</code> <code>rotz</code>
+                                    <code>rotw</code></th>
+                                <td>
+                                    Wektor obrotu / kwaternion z czujnika. Bez
+                                    niego orientacja liczy się z samego
+                                    żyroskopu — mniej dokładnie.
+                                </td>
+                                <td><span class="tag tag-rec">zalecane</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>linaccx</code> <code>linaccy</code>
+                                    <code>linaccz</code></th>
+                                <td>Przyspieszenie liniowe, już bez grawitacji.</td>
+                                <td><span class="tag">opcjonalne</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>magx</code> <code>magy</code> <code>magz</code></th>
+                                <td>Magnetometr, trzy osie.</td>
+                                <td><span class="tag">opcjonalne</span></td>
+                            </tr>
+                            <tr>
+                                <th scope="row"><code>csv_version</code></th>
+                                <td>
+                                    Obecność tej kolumny przełącza przygotowanie
+                                    na wariant dla nowszego formatu zapisu.
+                                </td>
+                                <td><span class="tag">opcjonalne</span></td>
+                            </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    <p class="note note-warn">
+                        <svg class="icon"><use href="#i-alert"></use></svg>
+                        <span>
+                            Brak choćby jednej kolumny wymaganej kończy upload
+                            komunikatem <code>Brakuje wymaganych kolumn: …</code>
+                            i plik <strong>nie wchodzi</strong> do systemu — nie
+                            zostaje po nim ani pozycja na liście, ani plik na
+                            dysku.
+                        </span>
+                    </p>
+                </div>
+
+                <aside class="split-side">
+                    <div class="side-card">
+                        <h3>Limity uploadu</h3>
+                        <ul class="ticks">
+                            <li>rozszerzenie <code>.csv</code></li>
+                            <li>maksymalnie 300&nbsp;MB</li>
+                            <li>plik nie może być pusty</li>
+                            <li>pierwsze wiersze muszą dać się odczytać jako CSV</li>
+                        </ul>
+                    </div>
+                    <div class="side-card">
+                        <h3>Przykładowy nagłówek</h3>
+                        <pre class="code"><code>accx,accy,accz,gyrx,gyry,gyrz,
+magx,magy,magz,linaccx,linaccy,
+linaccz,rotx,roty,rotz,timestamp</code></pre>
+                        <p class="side-note">
+                            Kolejność kolumn nie ma znaczenia — liczy się to,
+                            że są.
+                        </p>
+                    </div>
+                </aside>
+            </div>
+
+            <h3 class="block-title block-title-spaced">Co powstaje po wgraniu</h3>
+            <p class="block-lede">
+                Twój plik zostaje na serwerze <strong>w dwóch wersjach</strong>
+                o tej samej nazwie. Aplikacja rysuje i liczy wyłącznie z wersji
+                przygotowanej; wersja surowa jest po to, żeby dało się to
+                przygotowanie kiedyś powtórzyć w innym narzędziu.
+            </p>
+
+            <div class="grid grid-2">
+                <article class="pipe-card">
+                    <span class="pipe-tag">wersja surowa</span>
+                    <h4>Dokładnie ten plik, który przysłałeś</h4>
+                    <p>
+                        Bajt w bajt, bez żadnej zmiany. Dostępny do pobrania jako
+                        <code>…_raw.csv</code>.
+                    </p>
+                    <p class="pipe-note">
+                        Zestaw demonstracyjny nie ma tej wersji — wchodzi na konto
+                        od razu przygotowany. To normalny stan, a nie usterka.
+                    </p>
+                </article>
+
+                <article class="pipe-card pipe-card-accent">
+                    <span class="pipe-tag">wersja przygotowana</span>
+                    <h4>To, co widzisz na wykresie</h4>
+                    <ul class="ticks">
+                        <li>
+                            <strong>filtr dolnoprzepustowy</strong> — 10&nbsp;Hz dla
+                            <code>acc*</code> i <code>linacc*</code>, 5&nbsp;Hz dla
+                            <code>gyr*</code> i <code>mag*</code>
+                        </li>
+                        <li>
+                            <code>rot*</code> <strong>nie jest filtrowane</strong>
+                            — to składowe kwaternionu, filtr osobno na każdej
+                            osi zepsułby opis obrotu
+                        </li>
+                        <li>
+                            <code>acc_magnitude</code>, <code>gyr_magnitude</code>
+                            — moduły obu wektorów
+                        </li>
+                        <li>
+                            <code>time</code> — oś czasu w sekundach, liczona od
+                            początku nagrania
+                        </li>
+                        <li>
+                            <code>jerk_acc*</code>, <code>jerk_gyr*</code>
+                            i moduły ich pochodnych
+                        </li>
+                        <li><code>roll</code>, <code>pitch</code> — kąty przechyłu</li>
+                        <li>
+                            <code>session_index</code> — nazwa pliku źródłowego,
+                            żeby po scaleniu nagrań wiadomo było, skąd jest wiersz
+                        </li>
+                    </ul>
+                </article>
+            </div>
+
+            <div class="grid grid-2 grid-spaced">
+                <article class="pipe-card">
+                    <h4>Wykres 2D</h4>
+                    <p>
+                        Serie są <strong>znormalizowane do zakresu 0–1</strong>,
+                        żeby dało się porównać przebiegi w różnych jednostkach na
+                        jednej osi. Wartości fizyczne zostają nietknięte
+                        w pobieranym pliku i w rekonstrukcji 3D.
+                    </p>
+                    <p>
+                        Cały przebieg jest decymowany metodą min–max — z każdego
+                        kubełka zostaje próbka najmniejsza i największa, więc
+                        krótkie szczyty nie znikają. Po przybliżeniu przeglądarka
+                        dopytuje serwer o pełną rozdzielczość widocznego zakresu
+                        z zapasem na przesuwanie.
+                    </p>
+                </article>
+
+                <article class="pipe-card">
+                    <h4>Ruch 3D</h4>
+                    <p>
+                        Zakładka jest aktywna, gdy plik ma oś czasu
+                        (<code>time</code> albo <code>timestamp</code>) oraz
+                        komplet <code>rot*</code> albo komplet <code>gyr*</code>.
+                        Sam akcelerometr nie wystarczy: bez orientacji nie da się
+                        oddzielić grawitacji od ruchu.
+                    </p>
+                    <p>
+                        Animacja liczy się zawsze dla <strong>jednego
+                        segmentu</strong>, nigdy dla widocznego fragmentu
+                        wykresu. Do dyspozycji masz odtwarzanie w pętli, tempo od
+                        0,1× do 2×, suwak pozycji, obrót sceny wokół pojedynczej
+                        osi oraz statystyki: czas segmentu, drogę nadgarstka
+                        i prędkość maksymalną.
+                    </p>
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         KONTO
+         ============================================================ -->
+    <section class="section" id="konto">
+        <div class="wrap">
+            <header class="section-head">
+                <p class="kicker">Konto</p>
+                <h2>Logowanie i rejestracja</h2>
+                <p class="section-lede">
+                    Wszystko, co wgrywasz i zaznaczasz, jest przypisane do twojego
+                    konta. Zestawy innych użytkowników są niewidoczne — także
+                    wtedy, gdy ktoś zgadnie nazwę pliku.
+                </p>
+            </header>
+
+            <div class="grid grid-2">
+                <article class="account-card">
+                    <span class="account-icon"><svg class="icon icon-xl"><use href="#i-power"></use></svg></span>
+                    <h3>Mam już konto</h3>
+                    <p>
+                        Zaloguj się nazwą użytkownika i hasłem. Po zalogowaniu
+                        trafiasz prosto na dashboard z ostatnio otwartym
+                        zestawem.
+                    </p>
+                    {% if request.user.is_authenticated %}
+                        <p class="account-state">
+                            <svg class="icon"><use href="#i-info"></use></svg>
+                            Jesteś zalogowany jako <strong>{{ request.user.username }}</strong>.
+                        </p>
+                        <a class="btn btn-primary" href="{% url 'dashboard' %}">
+                            Otwórz dashboard
+                        </a>
+                    {% else %}
+                        <a class="btn btn-primary" href="{% url 'login' %}">
+                            Zaloguj się
+                        </a>
+                    {% endif %}
+                </article>
+
+                <article class="account-card">
+                    <span class="account-icon"><svg class="icon icon-xl"><use href="#i-target"></use></svg></span>
+                    <h3>Pierwszy raz tutaj</h3>
+                    <p>
+                        Załóż konto — zajmuje chwilę i od razu dostajesz zestaw
+                        demonstracyjny z opisanymi uderzeniami, więc nie zaczynasz
+                        od pustego ekranu.
+                    </p>
+                    <ul class="ticks ticks-tight">
+                        <li>nazwa użytkownika</li>
+                        <li>adres e-mail</li>
+                        <li>hasło (dwa razy)</li>
+                    </ul>
+                    {% if request.user.is_authenticated %}
+                        <a class="btn btn-outline" href="{% url 'datasets' %}">
+                            Przejdź do swoich zestawów
+                        </a>
+                    {% else %}
+                        <a class="btn btn-primary" href="{% url 'register' %}">
+                            Załóż konto
+                        </a>
+                    {% endif %}
+                </article>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         POMOC
+         ============================================================ -->
+    <section class="section section-alt" id="pomoc">
+        <div class="wrap wrap-narrow">
+            <header class="section-head">
+                <p class="kicker">Pomoc</p>
+                <h2>Komunikaty i najczęstsze pytania</h2>
+                <p class="section-lede">
+                    Poniżej dokładnie te zdania, które zobaczysz w aplikacji, wraz
+                    z tym, co robić dalej.
+                </p>
+            </header>
+
+            <div class="faq">
+                <details>
+                    <summary>„Brakuje wymaganych kolumn: …”</summary>
+                    <p>
+                        W nagłówku pliku nie ma którejś z kolumn
+                        <code>accx</code>, <code>accy</code>, <code>accz</code>,
+                        <code>gyrx</code>, <code>gyry</code>, <code>gyrz</code>,
+                        <code>timestamp</code>. Komunikat wymienia brakujące po
+                        nazwie. Sprawdź, czy eksport z czujnika nie zmienił nazw
+                        (wielkie litery, spacje, prefiksy) i czy nagłówek jest
+                        w pierwszym wierszu pliku.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>„Dozwolone są tylko pliki .csv.”</summary>
+                    <p>
+                        Przyjmowane jest wyłącznie rozszerzenie <code>.csv</code>.
+                        Arkusz <code>.xlsx</code> ani archiwum <code>.zip</code>
+                        nie przejdą — wyeksportuj dane do CSV i spróbuj ponownie.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>„Plik jest za duży (limit 300 MB).”</summary>
+                    <p>
+                        Podziel nagranie na krótsze sesje. Do pracy nad techniką
+                        i tak wygodniejszy jest wycinek z kilkoma uderzeniami niż
+                        cały trening: krótszy plik szybciej się wczytuje
+                        i łatwiej w nim trafić w granice uderzenia.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>„Nie udało się odczytać pliku jako CSV.”</summary>
+                    <p>
+                        Plik ma rozszerzenie <code>.csv</code>, ale jego treść nie
+                        jest tabelą — typowo przez inny separator, znaki spoza
+                        UTF-8 albo nagłówek doklejony po kilku wierszach opisu.
+                        Otwórz plik w edytorze tekstu i sprawdź pierwsze wiersze.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>Zakładka „Ruch 3D” jest nieaktywna</summary>
+                    <p>
+                        Plik nie ma kompletu kolumn potrzebnych do odtworzenia
+                        orientacji: potrzebna jest oś czasu
+                        (<code>time</code> albo <code>timestamp</code>) plus
+                        wszystkie trzy <code>rot*</code> albo wszystkie trzy
+                        <code>gyr*</code>.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>„Zaznacz uderzenie na wykresie 2D — animacja liczy się
+                        dla pojedynczego segmentu.”</summary>
+                    <p>
+                        Rekonstrukcja 3D opisuje jeden ruch, więc potrzebuje
+                        zaznaczonego segmentu, a nie dowolnego fragmentu wykresu.
+                        Wróć na zakładkę „Przebieg 2D”, zaznacz uderzenie
+                        i wybierz je z listy nad sceną.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>Mój plik nazywa się teraz „nagranie(2).csv”</summary>
+                    <p>
+                        Nazwa była już zajęta przez inny twój zestaw. Zamiast
+                        nadpisać starszy plik, nowy dostaje kolejny numer. Nazwy
+                        są też oczyszczane ze spacji i znaków, które nie mogą
+                        trafić do adresu.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>Usunąłem zestaw demonstracyjny — czy wróci?</summary>
+                    <p>
+                        Nie. Demo zakładane jest raz, przy tworzeniu konta.
+                        Usunięcie zestawu jest twoją decyzją, a nie usterką do
+                        naprawienia przy następnym logowaniu.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>Czy inni zobaczą moje nagrania?</summary>
+                    <p>
+                        Nie. Każdy zestaw ma właściciela, a wszystkie zapytania —
+                        wykres, zakresy, segmenty, pobieranie — szukają pliku
+                        wyłącznie wśród zestawów zalogowanego użytkownika. Nazwa
+                        z adresu nigdy nie buduje ścieżki na dysku samodzielnie.
+                    </p>
+                </details>
+
+                <details>
+                    <summary>Dlaczego wartości na wykresie są między 0 a 1?</summary>
+                    <p>
+                        Serie są normalizowane, żeby przyspieszenie, prędkość
+                        kątowa i kąty dały się porównać na jednej osi. Wartości
+                        w jednostkach fizycznych znajdziesz w pobranym pliku
+                        przygotowanym — i to na nich liczona jest animacja 3D.
+                    </p>
+                </details>
+            </div>
+        </div>
+    </section>
+
+    <!-- ============================================================
+         CTA
+         ============================================================ -->
+    <section class="cta">
+        <div class="wrap cta-inner">
+            <div>
+                <h2>
+                    {% if request.user.is_authenticated %}
+                        Wróć do pracy
+                    {% else %}
+                        Zacznij od zestawu demonstracyjnego
+                    {% endif %}
+                </h2>
+                <p>
+                    {% if request.user.is_authenticated %}
+                        Twoje zestawy czekają tam, gdzie je zostawiłeś.
+                    {% else %}
+                        Konto zakłada się w chwilę, a pierwszy wykres masz od razu
+                        po zalogowaniu — bez wgrywania czegokolwiek.
+                    {% endif %}
+                </p>
+            </div>
+            <div class="cta-actions">
+                {% if request.user.is_authenticated %}
+                    <a class="btn btn-primary btn-lg" href="{% url 'dashboard' %}">
+                        Otwórz dashboard
+                    </a>
+                    <a class="btn btn-quiet btn-lg" href="{% url 'datasets' %}">
+                        Zestawy danych
+                    </a>
+                {% else %}
+                    <a class="btn btn-primary btn-lg" href="{% url 'register' %}">
+                        Załóż konto
+                    </a>
+                    <a class="btn btn-quiet btn-lg" href="{% url 'login' %}">
+                        Mam już konto
+                    </a>
+                {% endif %}
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<footer class="site-footer">
+    <div class="wrap footer-inner">
+        <div class="footer-brand">
+            <span class="brand-mark"><svg class="icon"><use href="#i-wave"></use></svg></span>
+            <span>accur8<strong>pool</strong></span>
+        </div>
+        <nav class="footer-nav" aria-label="Stopka">
+            <a href="#czym-jest">Czym to jest</a>
+            <a href="#demo">Demo</a>
+            <a href="#start">Jak zacząć</a>
+            <a href="#dane">Twoje dane</a>
+            <a href="#pomoc">Pomoc</a>
+            {% if request.user.is_authenticated %}
+                <a href="{% url 'dashboard' %}">Dashboard</a>
+            {% else %}
+                <a href="{% url 'login' %}">Logowanie</a>
+                <a href="{% url 'register' %}">Rejestracja</a>
+            {% endif %}
+        </nav>
+        <p class="footer-note">Analiza ruchu w bilardzie z czujnika IMU.</p>
+    </div>
+</footer>
+
+{% if preview %}{{ preview|json_script:"demo-preview" }}{% endif %}
+<script src="{% static 'js/home.js' %}"></script>
+</body>
+</html>

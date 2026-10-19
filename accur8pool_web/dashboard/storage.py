@@ -27,8 +27,10 @@ from .models import Dataset
 logger = logging.getLogger(__name__)
 
 import sys, os
+
 print("CWD:", os.getcwd())
 print("PATH0:", sys.path[0])
+
 
 class DataPreparationUnavailable(Exception):
     """Awaria wdrożenia, nie wada wgranego pliku — patrz DatasetStorage.prepare."""

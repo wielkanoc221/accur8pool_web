@@ -58,7 +58,7 @@ logger = logging.getLogger(__name__)
 # przygotowania danych — żaden widok już z tego drzewa nie czyta.
 DATA_DIR = Path(
     getattr(settings, "ACCUR8POOL_DATA_DIR",
-            Path(settings.BASE_DIR) / "new_data" / "raw_data")
+            Path(settings.BASE_DIR) / "data" / "raw_data")
 )
 
 # Te same pliki po transform_raw_df — pod tą samą nazwą i tym samym
@@ -67,7 +67,7 @@ DATA_DIR = Path(
 # ten sam plik.
 PREPARED_DATA_DIR = Path(
     getattr(settings, "ACCUR8POOL_PREPARED_DATA_DIR",
-            Path(settings.BASE_DIR) / "new_data" / "prepared_data")
+            Path(settings.BASE_DIR) / "data" / "prepared_data")
 )
 
 MAX_UPLOAD_SIZE = 300 * 1024 * 1024

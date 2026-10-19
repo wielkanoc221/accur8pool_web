@@ -51,8 +51,8 @@ SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 # nie do otwarcia”.
 # Ta sama nazwa pliku w obu katalogach wiąże wersję surową z przygotowaną,
 # więc nie trzeba trzymać drugiej ścieżki w bazie.
-ACCUR8POOL_DATA_DIR = BASE_DIR / "new_data" / "raw_data"
-ACCUR8POOL_PREPARED_DATA_DIR = BASE_DIR / "new_data" / "prepared_data"
+ACCUR8POOL_DATA_DIR = BASE_DIR / "data" / "raw_data"
+ACCUR8POOL_PREPARED_DATA_DIR = BASE_DIR / "data" / "prepared_data"
 
 # Zestaw demonstracyjny: JEDEN przygotowany plik CSV plus opis segmentów
 # (demo.json), kopiowany do drzewa KAŻDEGO nowego użytkownika przy
@@ -76,6 +76,10 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    # 'home' jest PRZED 'dashboard', bo szablony szuka się w kolejności
+    # aplikacji: strona główna dołącza icons.html, który leży w dashboardzie,
+    # i nie ma własnej kopii tego pliku.
+    'home',
     'account',
     'dashboard'
 ]

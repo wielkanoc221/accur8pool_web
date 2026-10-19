@@ -45,6 +45,17 @@ widzi — na wykresie — a potem eksportuje:
    python manage.py install_demo ala ola  # tylko wskazane
    ```
 
+5. Przelicz podgląd na stronie głównej — rysuje ona wykres z **tego**
+   zestawu, więc bez tego kroku pokazywałaby poprzednie nagranie:
+
+   ```bash
+   python manage.py export_home_preview
+   ```
+
+   Wynik (`home/demo_preview.json`) wchodzi do repozytorium razem z demo.
+   Pilnuje tego test `home.tests`, więc pominięty krok skończy się czerwonym
+   testem, a nie cichą rozbieżnością.
+
 ## Format `demo.json`
 
 ```json
